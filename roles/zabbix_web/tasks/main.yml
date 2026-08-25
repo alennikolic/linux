@@ -1,0 +1,166 @@
+---
+# roles/zabbix_web/tasks/main.yml
+#
+#   1. Provere
+#   2. Instalacija paketa
+#   3. PHP podesavanja
+#   4. Vhost konfiguracija
+#   5. zabbix.conf.php — preskace carobnjak
+#   6. Servisi
+
+- name: "Instalacija i konfiguracija Zabbix frontenda"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je distribucija podrzana"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Rola "zabbix_web" trenutno podrzava iskljucivo Debian/Ubuntu,
+          a ovaj host je {{ ansible_os_family | default('nepoznat') }}.
+        success_msg: "Distribucija je podrzana."
+
+    - name: "Provera izbora web servera"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_web_server in ['nginx', 'apache']
+        fail_msg: >-
+          role_zabbix_web_server mora biti "nginx" ili "apache", a
+          zadato je "{{ role_zabbix_web_server }}".
+        success_msg: "Izbor web servera je ispravan."
+
+    - name: "Provera da je lozinka baze zadata"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_web_db_password is defined
+          - role_zabbix_web_db_password | length > 0
+        fail_msg: >-
+          role_zabbix_web_db_password nije popunjen. Mora biti ista
+          vrednost kao role_zabbix_db_password. Frontend cita bazu
+          direktno i bez lozinke ne moze da radi.
+        success_msg: "Lozinka baze je zadata."
+
+    # -----------------------------------------------------------------
+    # 2. Instalacija
+    # -----------------------------------------------------------------
+
+    - name: "Instalacija frontenda i konfiguracije web servera"
+      ansible.builtin.apt:
+        name: >-
+          {{ [_zabbix_web_frontend_package, _zabbix_web_conf_package]
+             | map('regex_replace', '$',
+                   '=' ~ role_zabbix_web_version
+                   if role_zabbix_web_version | length > 0 else '')
+             | list }}
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      notify:
+        - "Restartuj web server"
+        - "Restartuj PHP-FPM"
+
+    # -----------------------------------------------------------------
+    # 3. PHP
+    # -----------------------------------------------------------------
+    # Verzija PHP-a se otkriva iz sistema, jer se razlikuje izmedju
+    # Ubuntu izdanja (8.1 na 22.04, 8.3 na 24.04).
+
+    - name: "Otkrivanje verzije PHP-a"
+      ansible.builtin.shell:
+        cmd: "php -r 'echo PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION;'"
+      register: _php_version
+      changed_when: false
+
+    - name: "Podesavanja PHP-a za Zabbix"
+      ansible.builtin.template:
+        src: zabbix-php.ini.j2
+        dest: "/etc/php/{{ _php_version.stdout }}/fpm/conf.d/99-zabbix.ini"
+        owner: root
+        group: root
+        mode: '0644'
+      when: _zabbix_web_php_fpm_needed | bool
+      notify: "Restartuj PHP-FPM"
+
+    - name: "Podesavanja PHP-a za Zabbix (Apache)"
+      ansible.builtin.template:
+        src: zabbix-php.ini.j2
+        dest: "/etc/php/{{ _php_version.stdout }}/apache2/conf.d/99-zabbix.ini"
+        owner: root
+        group: root
+        mode: '0644'
+      when: role_zabbix_web_server == 'apache'
+      failed_when: false
+      notify: "Restartuj web server"
+
+    # -----------------------------------------------------------------
+    # 4. Vhost
+    # -----------------------------------------------------------------
+    # Paket zabbix-nginx-conf isporucuje /etc/zabbix/nginx.conf sa
+    # zakomentarisanim listen i server_name. Rola ga prepisuje.
+
+    - name: "Vhost konfiguracija (Nginx)"
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/zabbix/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      when: role_zabbix_web_server == 'nginx'
+      notify: "Restartuj web server"
+
+    - name: "Ukljucivanje Zabbix vhost-a (Apache)"
+      ansible.builtin.file:
+        src: /etc/zabbix/apache.conf
+        dest: /etc/apache2/conf-enabled/zabbix.conf
+        state: link
+      when: role_zabbix_web_server == 'apache'
+      notify: "Restartuj web server"
+
+    # -----------------------------------------------------------------
+    # 5. Konfiguracija frontenda
+    # -----------------------------------------------------------------
+    # Upis ovog fajla preskace carobnjak za instalaciju koji se inace
+    # pojavljuje pri prvom otvaranju frontenda.
+
+    - name: "Folder za konfiguraciju frontenda"
+      ansible.builtin.file:
+        path: /etc/zabbix/web
+        state: directory
+        owner: root
+        group: www-data
+        mode: '0750'
+
+    - name: "Upis zabbix.conf.php"
+      ansible.builtin.template:
+        src: zabbix.conf.php.j2
+        dest: "{{ _zabbix_web_config_file }}"
+        owner: root
+        group: www-data
+        mode: '0640'
+        backup: true
+      no_log: true
+      notify: "Restartuj PHP-FPM"
+
+    # -----------------------------------------------------------------
+    # 6. Servisi
+    # -----------------------------------------------------------------
+
+    - name: "Servis PHP-FPM"
+      ansible.builtin.service:
+        name: "php{{ _php_version.stdout }}-fpm"
+        enabled: true
+        state: started
+      when: _zabbix_web_php_fpm_needed | bool
+
+    - name: "Servis {{ _zabbix_web_service }}"
+      ansible.builtin.service:
+        name: "{{ _zabbix_web_service }}"
+        enabled: "{{ role_zabbix_web_service_enabled | bool }}"
+        state: "{{ role_zabbix_web_service_state }}"
+
+  when: role_zabbix_web_enabled | default(false) | bool
