@@ -1,0 +1,28 @@
+---
+# roles/zabbix_web/vars/main.yml
+#
+# Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
+# group_vars ili host_vars.
+
+# zabbix-nginx-conf / zabbix-apache-conf
+_zabbix_web_conf_package: "zabbix-{{ role_zabbix_web_server }}-conf"
+
+# Frontend paket zavisi od backend-a baze.
+_zabbix_web_frontend_package: "zabbix-frontend-php"
+
+_zabbix_web_service: >-
+  {{ 'apache2' if role_zabbix_web_server == 'apache'
+     else 'nginx' }}
+
+# Nginx: zaseban vhost fajl koji dolazi uz zabbix-nginx-conf
+# Apache: konfiguracija u conf-available
+_zabbix_web_vhost_file: >-
+  {{ '/etc/zabbix/apache.conf'
+     if role_zabbix_web_server == 'apache'
+     else '/etc/zabbix/nginx.conf' }}
+
+_zabbix_web_config_file: /etc/zabbix/web/zabbix.conf.php
+
+# PHP-FPM je potreban samo uz Nginx. Apache koristi mod_php ili
+# sopstveni FPM pool koji dolazi uz zabbix-apache-conf.
+_zabbix_web_php_fpm_needed: "{{ role_zabbix_web_server == 'nginx' }}"
