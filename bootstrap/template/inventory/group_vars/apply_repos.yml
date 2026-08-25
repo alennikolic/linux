@@ -1,0 +1,22 @@
+---
+# bootstrap/template/inventory/group_vars/apply_repos.yml
+#
+# Aktivacija role "repos" za sve hostove u grupi [apply_repos].
+#
+# Rola pokriva i sistemske i interne repozitorijume — razlika je
+# samo u sadrzaju liste role_repos_list, ne u kodu.
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [apply_repos] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_repos_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+#
+# NAPOMENA: play se izvrsava PRE packages i updates. Instalacija iz
+# repozitorijuma koji jos nije dodat bi pala.
+
+role_repos_enabled: true
