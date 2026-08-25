@@ -1,0 +1,32 @@
+---
+# playbooks/bootstrap.yml
+#
+# Jednokratna priprema sveze instaliranog servera.
+#
+# Ovaj playbook se NE pokrece kroz apply.sh. Razlog: ostali playovi se
+# povezuju kao "ansible" korisnik, koji na svezem serveru jos ne
+# postoji. Ovaj playbook se povezuje POSTOJECIM nalogom i tek kreira
+# taj nalog.
+#
+# Pokretanje:
+#
+#   cd /opt/ansible/production
+#   ansible-playbook ../linux/playbooks/bootstrap.yml \
+#     --limit srv-web-01 \
+#     --user root --ask-pass --ask-become-pass
+#
+# Posle uspesnog pokretanja proveri da kljuc radi:
+#
+#   ssh ansible@srv-web-01 sudo whoami
+#
+# Tek kada to prodje, host se moze koristiti sa apply.sh.
+#
+# gather_facts je iskljucen jer sistem mozda jos nema Python — rola
+# ga instalira preko raw modula, pa tek onda prikuplja podatke.
+
+- name: Bootstrap Ansible account
+  hosts: bootstrap
+  gather_facts: false
+  become: true
+  roles:
+    - ansible_user
