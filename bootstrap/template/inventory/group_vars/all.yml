@@ -38,3 +38,16 @@
 #   * Host: {{ inventory_hostname }}
 #   * Sve aktivnosti se beleze.                                     *
 #   *****************************************************************
+# ---------------------------------------------------------------------
+# Bootstrap: SSH kljuc kontrolnog cvora
+# ---------------------------------------------------------------------
+# OBAVEZNO pre pokretanja playbooks/bootstrap.yml.
+#
+# Upisi javni kljuc kontrolnog cvora u celosti, u jednoj liniji.
+# Procitas ga sa:
+#   cat ~/.ssh/id_ed25519.pub
+#
+# Ako kljuc jos ne postoji:
+#   ssh-keygen -t ed25519 -C "ansible@control"
+
+role_ansible_user_ssh_key: ""
