@@ -1,0 +1,60 @@
+---
+# roles/repos/tasks/main.yml
+#
+# Dodaje i uklanja APT repozitorijume prema listi role_repos_list.
+#
+# Koristi ansible.builtin.deb822_repository, koji upisuje moderni
+# .sources format u /etc/apt/sources.list.d/ i sam preuzima GPG
+# kljuc kada je signed_by zadat kao URL.
+
+- name: "Upravljanje APT repozitorijumima"
+  block:
+
+    - name: "Provera da je distribucija podrzana"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Rola "repos" trenutno podrzava iskljucivo Debian/Ubuntu, a
+          ovaj host je {{ ansible_os_family | default('nepoznat') }}.
+          Ukloni ga iz grupe [apply_repos] ili ga izuzmi kroz
+          host_vars/<host>.yml sa role_repos_enabled: false
+        success_msg: "Distribucija je podrzana."
+
+    - name: "Provera da svaki unos ima name i uris"
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - item.uris is defined
+        fail_msg: >-
+          Unos u role_repos_list nema obavezno polje "name" ili "uris".
+          Problematican unos: {{ item }}
+      loop: "{{ role_repos_list }}"
+      loop_control:
+        label: "{{ item.name | default('BEZ IMENA') }}"
+
+    - name: "Folder za GPG kljuceve"
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: "Upis APT repozitorijuma"
+      ansible.builtin.deb822_repository:
+        name: "{{ item.name }}"
+        types: "{{ item.types | default(['deb']) }}"
+        uris: "{{ item.uris }}"
+        suites: "{{ item.suites | default(ansible_distribution_release) }}"
+        components: "{{ item.components | default(['main']) }}"
+        signed_by: "{{ item.signed_by | default(omit) }}"
+        architectures: "{{ item.architectures | default(omit) }}"
+        enabled: "{{ item.enabled | default(true) }}"
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ role_repos_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: "Osvezi APT kes"
+
+  when: role_repos_enabled | default(false) | bool
