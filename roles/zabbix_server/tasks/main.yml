@@ -1,0 +1,190 @@
+---
+# roles/zabbix_server/tasks/main.yml
+#
+#   1. Provere
+#   2. Instalacija paketa
+#   3. Uvoz seme (jednokratno)
+#   4. Konfiguracioni fajl
+#   5. Servis
+
+- name: "Instalacija i konfiguracija Zabbix servera"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je distribucija podrzana"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Rola "zabbix_server" trenutno podrzava iskljucivo
+          Debian/Ubuntu, a ovaj host je
+          {{ ansible_os_family | default('nepoznat') }}.
+        success_msg: "Distribucija je podrzana."
+
+    - name: "Provera izbora backend-a"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_server_db_backend in ['mysql', 'pgsql']
+        fail_msg: >-
+          role_zabbix_server_db_backend mora biti "mysql" ili "pgsql",
+          a zadato je "{{ role_zabbix_server_db_backend }}".
+        success_msg: "Backend je ispravan."
+
+    - name: "Provera da je lozinka baze zadata"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_server_db_password is defined
+          - role_zabbix_server_db_password | length > 0
+        fail_msg: >-
+          role_zabbix_server_db_password nije popunjen. Sifruj lozinku
+          sa: ansible-vault encrypt_string 'lozinka'
+          --name 'role_zabbix_server_db_password'
+          pa je upisi u group_vars ili host_vars.
+        success_msg: "Lozinka baze je zadata."
+
+    # -----------------------------------------------------------------
+    # 2. Instalacija
+    # -----------------------------------------------------------------
+
+    - name: "Instalacija Zabbix servera i SQL skripti"
+      ansible.builtin.apt:
+        name: >-
+          {{ [_zabbix_server_package, 'zabbix-sql-scripts']
+             | map('regex_replace', '$',
+                   '=' ~ role_zabbix_server_version
+                   if role_zabbix_server_version | length > 0 else '')
+             | list }}
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      notify: "Restartuj Zabbix server"
+
+    - name: "Instalacija klijenta baze"
+      ansible.builtin.apt:
+        name: "{{ _zabbix_server_db_client_package }}"
+        state: present
+      when: role_zabbix_server_db_import | bool
+
+    # -----------------------------------------------------------------
+    # 3. Uvoz seme
+    # -----------------------------------------------------------------
+    # Lozinka ide kroz promenljivu okruzenja, ne kroz argument
+    # komande — argumenti su vidljivi u izlazu "ps".
+
+    - name: "Provera da li sema vec postoji"
+      ansible.builtin.shell:
+        cmd: >-
+          mysql -h {{ role_zabbix_server_db_host }}
+          -P {{ role_zabbix_server_db_port }}
+          -u {{ role_zabbix_server_db_user }}
+          {{ role_zabbix_server_db_name }}
+          -e "SELECT mandatory FROM dbversion LIMIT 1"
+      environment:
+        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
+      register: _schema_check
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when:
+        - role_zabbix_server_db_import | bool
+        - role_zabbix_server_db_backend == 'mysql'
+
+    # MySQL 8.0 sa binarnim logom odbija CREATE FUNCTION bez ove
+    # opcije. Ukljucuje se samo za trajanje uvoza.
+    - name: "Privremeno ukljucivanje log_bin_trust_function_creators"
+      ansible.builtin.shell:
+        cmd: >-
+          mysql -h {{ role_zabbix_server_db_host }}
+          -P {{ role_zabbix_server_db_port }}
+          -u {{ role_zabbix_server_db_user }}
+          -e "SET GLOBAL log_bin_trust_function_creators = 1"
+      environment:
+        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
+      changed_when: true
+      failed_when: false
+      no_log: true
+      when:
+        - role_zabbix_server_db_import | bool
+        - role_zabbix_server_db_backend == 'mysql'
+        - role_zabbix_server_db_set_log_bin_trust | bool
+        - _schema_check.rc | default(1) != 0
+
+    - name: "Uvoz seme u bazu (jednokratno)"
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          zcat {{ _zabbix_server_schema_file }} |
+          mysql --default-character-set=utf8mb4
+          -h {{ role_zabbix_server_db_host }}
+          -P {{ role_zabbix_server_db_port }}
+          -u {{ role_zabbix_server_db_user }}
+          {{ role_zabbix_server_db_name }}
+        executable: /bin/bash
+      environment:
+        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
+      changed_when: true
+      no_log: true
+      when:
+        - role_zabbix_server_db_import | bool
+        - role_zabbix_server_db_backend == 'mysql'
+        - _schema_check.rc | default(1) != 0
+      notify: "Restartuj Zabbix server"
+
+    - name: "Vracanje log_bin_trust_function_creators na staru vrednost"
+      ansible.builtin.shell:
+        cmd: >-
+          mysql -h {{ role_zabbix_server_db_host }}
+          -P {{ role_zabbix_server_db_port }}
+          -u {{ role_zabbix_server_db_user }}
+          -e "SET GLOBAL log_bin_trust_function_creators = 0"
+      environment:
+        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
+      changed_when: true
+      failed_when: false
+      no_log: true
+      when:
+        - role_zabbix_server_db_import | bool
+        - role_zabbix_server_db_backend == 'mysql'
+        - role_zabbix_server_db_set_log_bin_trust | bool
+        - _schema_check.rc | default(1) != 0
+
+    - name: "Napomena za PostgreSQL"
+      ansible.builtin.debug:
+        msg: >-
+          Backend je pgsql. Uvoz seme za PostgreSQL rola trenutno ne
+          radi automatski. Uvezi je rucno:
+          zcat {{ _zabbix_server_schema_file }} |
+          sudo -u zabbix psql {{ role_zabbix_server_db_name }}
+      when:
+        - role_zabbix_server_db_import | bool
+        - role_zabbix_server_db_backend == 'pgsql'
+
+    # -----------------------------------------------------------------
+    # 4. Konfiguracija
+    # -----------------------------------------------------------------
+
+    - name: "Upis konfiguracionog fajla"
+      ansible.builtin.template:
+        src: zabbix_server.conf.j2
+        dest: "{{ _zabbix_server_config_file }}"
+        owner: root
+        group: zabbix
+        mode: '0640'
+        backup: true
+      no_log: true
+      notify: "Restartuj Zabbix server"
+
+    # -----------------------------------------------------------------
+    # 5. Servis
+    # -----------------------------------------------------------------
+
+    - name: "Servis {{ _zabbix_server_service }}"
+      ansible.builtin.service:
+        name: "{{ _zabbix_server_service }}"
+        enabled: "{{ role_zabbix_server_service_enabled | bool }}"
+        state: "{{ role_zabbix_server_service_state }}"
+
+  when: role_zabbix_server_enabled | default(false) | bool
