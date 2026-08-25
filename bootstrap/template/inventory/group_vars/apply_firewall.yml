@@ -1,0 +1,19 @@
+---
+# bootstrap/template/inventory/group_vars/apply_firewall.yml
+#
+# Aktivacija role "firewall" za sve hostove u grupi [apply_firewall].
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [apply_firewall] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_firewall_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+#
+# PAZNJA: pogresna pravila mogu prekinuti SSH pristup. Obavezno
+# pokreni --check --diff --limit <host> pre primene.
+
+role_firewall_enabled: true
