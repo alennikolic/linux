@@ -1,0 +1,52 @@
+# .gitignore za radni (production) folder
+#
+# Ovaj folder podrazumevano NIJE git repozitorijum i ne treba da bude
+# u istom repozitorijumu kao role. Ako ga ipak versioniras, to mora
+# biti iskljucivo ka PRIVATNOM remote-u.
+#
+# Pravila ispod su namerno stroga.
+
+# --- Tajne -----------------------------------------------------------
+vault-pass*
+.vault-pass*
+*vault_pass*
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.jks
+id_rsa*
+id_ed25519*
+*.kdbx
+secrets.yml
+secrets.yaml
+*secret*
+*.env
+.env*
+
+# --- Ansible radni fajlovi -------------------------------------------
+*.retry
+.facts/
+fact_cache/
+*.log
+ansible.log
+
+# --- Lokalni override ------------------------------------------------
+ansible.cfg.local
+inventory/hosts.local
+inventory/*.local
+
+# --- Editor i sistem -------------------------------------------------
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# --- Python ----------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
