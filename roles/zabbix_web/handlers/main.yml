@@ -1,0 +1,17 @@
+---
+# roles/zabbix_web/handlers/main.yml
+
+- name: "Restartuj web server"
+  ansible.builtin.service:
+    name: "{{ _zabbix_web_service }}"
+    state: restarted
+  when: role_zabbix_web_service_state != 'stopped'
+
+- name: "Restartuj PHP-FPM"
+  ansible.builtin.service:
+    name: "php{{ _php_version.stdout }}-fpm"
+    state: restarted
+  when:
+    - _zabbix_web_php_fpm_needed | bool
+    - _php_version is defined
+    - _php_version.stdout is defined
