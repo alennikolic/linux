@@ -1,0 +1,44 @@
+<?php
+{{ '//' }} {{ _zabbix_web_config_file }}
+{{ '//' }}
+{{ '//' }} UPRAVLJA ANSIBLE ROLA: zabbix_web
+{{ '//' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+{{ '//' }}
+{{ '//' }} Postojanje ovog fajla preskace carobnjak za instalaciju.
+
+$DB['TYPE']                     = '{{ 'POSTGRESQL' if role_zabbix_web_db_backend == 'pgsql' else 'MYSQL' }}';
+$DB['SERVER']                   = '{{ role_zabbix_web_db_host }}';
+$DB['PORT']                     = '{{ role_zabbix_web_db_port }}';
+$DB['DATABASE']                 = '{{ role_zabbix_web_db_name }}';
+$DB['USER']                     = '{{ role_zabbix_web_db_user }}';
+$DB['PASSWORD']                 = '{{ role_zabbix_web_db_password }}';
+
+{{ '//' }} Koristi se samo za PostgreSQL sa nestandardnom semom.
+$DB['SCHEMA']                   = '';
+
+{{ '//' }} --- Enkripcija ka bazi ----------------------------------------
+$DB['ENCRYPTION']               = false;
+$DB['KEY_FILE']                 = '';
+$DB['CERT_FILE']                = '';
+$DB['CA_FILE']                  = '';
+$DB['VERIFY_HOST']              = false;
+$DB['CIPHER_LIST']              = '';
+
+{{ '//' }} --- Vault ------------------------------------------------------
+$DB['VAULT_URL']                = '';
+$DB['VAULT_DB_PATH']            = '';
+$DB['VAULT_TOKEN']              = '';
+
+$DB['DOUBLE_IEEE754']           = true;
+
+{{ '//' }} --- Zabbix server ---------------------------------------------
+$ZBX_SERVER                     = '{{ role_zabbix_web_server_host }}';
+$ZBX_SERVER_PORT                = '{{ role_zabbix_web_server_port }}';
+$ZBX_SERVER_NAME                = '{{ role_zabbix_web_server_name }}';
+
+$IMAGE_FORMAT_DEFAULT           = IMAGE_FORMAT_PNG;
+{% if role_zabbix_web_extra_config | length > 0 %}
+
+{{ '//' }} --- Dodatna konfiguracija -------------------------------------
+{{ role_zabbix_web_extra_config }}
+{% endif %}
