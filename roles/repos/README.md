@@ -2,7 +2,22 @@
 
 Dodaje i uklanja APT repozitorijume na Debian/Ubuntu sistemima.
 
-Rola **ne instalira pakete** — samo dodaje izvore. Instalacija je posao role `packages`, koja se u `playbook.yml` izvršava kasnije. Redosled je namerno takav: instalacija iz repozitorijuma koji još nije dodat bi pala.
+Rola **ne instalira aplikacije** — samo dodaje izvore. Instalacija je posao role `packages`, koja se u `playbook.yml` izvršava kasnije. Redosled je namerno takav: instalacija iz repozitorijuma koji još nije dodat bi pala.
+
+---
+
+## Dva načina dodavanja
+
+| Varijabla | Kada se koristi |
+|---|---|
+| `role_repos_list` | **Podrazumevano.** Direktan upis APT izvora. |
+| `role_repos_deb_packages` | Kada vendor ne dokumentuje direktan unos. |
+
+Prvi način je predvidljiv: URL repozitorijuma se ne menja godinama, ključ se preuzima sa stabilne adrese, a modul poredi sadržaj i upisuje samo razliku.
+
+Drugi način instalira vendorov konfiguracioni paket (`zabbix-release`, `mysql-apt-config`), koji zatim sam upiše `.sources` fajl i ključ. Radi, ali URL sadrži reviziju paketa koja se menja bez najave — `zabbix-release_7.0-1` je postao `7.0-2`, pa stari URL vraća 404. Zbog toga je ovo drugi izbor, ne prvi.
+
+Ne mešaj oba načina za isti repozitorijum — dobićeš dva `.sources` fajla koja pokazuju na isto mesto.
 
 ---
 
@@ -19,7 +34,7 @@ srv-mon-01
 
 Grupi pripada `group_vars/apply_repos.yml`, koji postavlja `role_repos_enabled: true`. Taj fajl ne treba dirati.
 
-Da bi host privremeno bio izuzet, a da ostane u grupi:
+Izuzetak po hostu:
 
 ```yaml
 # inventory/host_vars/srv-db-01.yml
@@ -36,7 +51,7 @@ role_repos_enabled: false
 | `apt` 2.4+ (Ubuntu 22.04+) | podrška za `.sources` format |
 | Debian ili Ubuntu | rola prekida rad nad ostalim distribucijama |
 
-RHEL/Rocky/Alma trenutno nisu podržani. Rola pukne sa jasnom porukom umesto da tiho ne uradi ništa.
+RHEL/Rocky/Alma nisu podržani. Rola pukne sa jasnom porukom umesto da tiho ne uradi ništa.
 
 ---
 
@@ -45,10 +60,11 @@ RHEL/Rocky/Alma trenutno nisu podržani. Rola pukne sa jasnom porukom umesto da 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
 | `role_repos_enabled` | `false` | Kada je `false`, rola ne dira ništa. |
-| `role_repos_list` | `[]` | Lista repozitorijuma. |
+| `role_repos_list` | `[]` | Repozitorijumi upisani direktno. |
+| `role_repos_deb_packages` | `[]` | Vendorovi `.deb` release paketi. |
 | `role_repos_update_cache` | `true` | Osvežava APT keš posle izmene. |
 
-### Polja jednog unosa
+### Polja u `role_repos_list`
 
 | Polje | Obavezno | Podrazumevano | Opis |
 |---|---|---|---|
@@ -61,6 +77,14 @@ RHEL/Rocky/Alma trenutno nisu podržani. Rola pukne sa jasnom porukom umesto da 
 | `types` | ne | `[deb]` | Dodaj `deb-src` ako trebaju izvorni paketi. |
 | `enabled` | ne | `true` | Upisuje unos ali ga isključuje. |
 | `state` | ne | `present` | `absent` uklanja repozitorijum. |
+
+### Polja u `role_repos_deb_packages`
+
+| Polje | Obavezno | Opis |
+|---|---|---|
+| `name` | da | Ime paketa kako ga vidi `dpkg`. Koristi se pri uklanjanju. |
+| `url` | za `present` | Puna adresa `.deb` fajla. |
+| `state` | ne | `present` (podrazumevano) ili `absent`. |
 
 ---
 
@@ -144,6 +168,41 @@ role_repos_list:
     signed_by: "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023"
 ```
 
+### Preko `.deb` release paketa
+
+```yaml
+role_repos_deb_packages:
+  - name: zabbix-release
+    url: "https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-2+ubuntu24.04_all.deb"
+```
+
+Verzija Ubuntua je deo imena fajla, pa isti URL ne radi na 22.04 i 24.04. Ako imaš mešovitu flotu:
+
+```yaml
+role_repos_deb_packages:
+  - name: zabbix-release
+    url: "https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-2+ubuntu{{ ansible_distribution_version }}_all.deb"
+```
+
+Uklanjanje, zajedno sa `.sources` fajlom koji je paket upisao:
+
+```yaml
+role_repos_deb_packages:
+  - name: zabbix-release
+    state: absent
+```
+
+### Uklanjanje direktno upisanog repozitorijuma
+
+```yaml
+role_repos_list:
+  - name: stari-repo
+    uris: "https://example.com/apt"
+    state: absent
+```
+
+Unos mora ostati u listi dok se ne primeni nad svim hostovima. Ako ga samo obrišeš iz liste, fajl na serveru ostaje.
+
 ### Različiti repozitorijumi po ulozi servera
 
 Pošto `host_vars` ima viši prioritet, lista se može zameniti za pojedinačan host:
@@ -160,17 +219,6 @@ role_repos_list:
 
 Lista se **ne spaja** sa globalnom — `host_vars` je u celosti zamenjuje.
 
-### Uklanjanje repozitorijuma
-
-```yaml
-role_repos_list:
-  - name: stari-repo
-    uris: "https://example.com/apt"
-    state: absent
-```
-
-Unos mora ostati u listi dok se ne primeni nad svim hostovima. Ako ga samo obrišeš iz liste, fajl na serveru ostaje.
-
 ---
 
 ## Napomene
@@ -183,9 +231,11 @@ Unos mora ostati u listi dok se ne primeni nad svim hostovima. Ako ga samo obri�
 signed_by: /etc/apt/keyrings/zabbix.asc
 ```
 
+**`.deb` paket se preuzima pri svakom pokretanju.** Modul poredi verziju sa instaliranom i prijavljuje `ok` ako je ista, ali fajl svejedno skida. Kod velikog broja hostova to je nepotreban saobraćaj — još jedan razlog da `role_repos_list` bude prvi izbor.
+
 **Keš se osvežava kroz handler**, dakle na kraju play-a. Pošto `packages` rola ide u zasebnom, kasnijem play-u, redosled je ispravan.
 
-**Idempotentnost.** Modul `deb822_repository` poredi sadržaj i upisuje samo kada se razlikuje. Ponovljeno pokretanje prijavljuje `ok`, ne `changed`.
+**Idempotentnost.** `deb822_repository` poredi sadržaj i upisuje samo kada se razlikuje. Ponovljeno pokretanje prijavljuje `ok`, ne `changed`.
 
 ---
 
@@ -201,6 +251,8 @@ roles/repos/
 └── tasks/
     └── main.yml
 ```
+
+Rola nema `templates/` — `deb822_repository` sam generiše `.sources` fajl.
 
 ---
 
