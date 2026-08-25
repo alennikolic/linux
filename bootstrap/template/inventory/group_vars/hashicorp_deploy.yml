@@ -1,0 +1,18 @@
+---
+# bootstrap/template/inventory/group_vars/hashicorp_deploy.yml
+#
+# Aktivacija role "hashicorp_deploy" za sve hostove u grupi
+# [hashicorp_deploy].
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [hashicorp_deploy] u hosts.ini, a ne izmenom vrednosti
+# ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_hashicorp_deploy_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+
+role_hashicorp_deploy_enabled: true
