@@ -1,0 +1,40 @@
+---
+# bootstrap/template/inventory/group_vars/all.yml
+#
+# Globalni parametri koji vaze za sve hostove.
+#
+# VAZNO: ovde NE idu role_<ime>_enabled prekidaci. Aktivacija role ide
+# iskljucivo kroz clanstvo hosta u odgovarajucoj grupi u hosts.ini.
+# Ovde idu samo parametri — kako se rola izvrsava, ne da li.
+#
+# Prioritet (od najniseg ka najvisem):
+#   roles/<rola>/defaults/main.yml
+#   group_vars/all.yml          <- ovaj fajl
+#   group_vars/<grupa>.yml
+#   host_vars/<host>.yml
+#
+# Spisak dostupnih parametara za svaku rolu nalazi se u njenom
+# defaults/main.yml, sa komentarima i primerima.
+
+
+# ---------------------------------------------------------------------
+# Parametri konekcije
+# ---------------------------------------------------------------------
+# ansible_user: admin
+# ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+# ansible_python_interpreter: /usr/bin/python3
+
+
+# ---------------------------------------------------------------------
+# Primeri globalnih parametara rola
+# ---------------------------------------------------------------------
+# Odkomentarisi i prilagodi po potrebi.
+
+# role_timezone_name: Europe/Belgrade
+
+# role_banner_text: |
+#   *****************************************************************
+#   * UPOZORENJE: Pristup samo za ovlascena lica                    *
+#   * Host: {{ inventory_hostname }}
+#   * Sve aktivnosti se beleze.                                     *
+#   *****************************************************************
