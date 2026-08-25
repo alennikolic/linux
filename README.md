@@ -152,10 +152,12 @@ git clone https://github.com/<korisnik>/linux.git
 ### 2. Inicijalizuj radni folder
 
 ```bash
-./linux/bootstrap/init.sh /opt/ansible/production
+bash linux/bootstrap/init.sh /opt/ansible/production
 ```
 
-Skripta kopira šablon iz `bootstrap/template/`, postavi izvršne dozvole i ispiše sledeće korake.
+> Skripta se namerno poziva kroz `bash`, jer fajlovi kreirani preko GitHub web interfejsa nemaju izvršni bit. `apply.sh` u radnom folderu tu nema problem — njemu izvršni bit postavlja sam `init.sh`.
+
+Skripta kopira šablon iz `bootstrap/template/`, upiše putanje ka repozitorijumu i ispiše sledeće korake.
 
 `init.sh` se pokreće **samo jednom**. Ako ciljni folder već sadrži `ansible.cfg`, skripta prekida rad i ne dira postojeće fajlove — nema rizika od gubitka konfiguracije pri ponovnom pokretanju.
 
