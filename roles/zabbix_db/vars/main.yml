@@ -1,0 +1,24 @@
+---
+# roles/zabbix_db/vars/main.yml
+#
+# Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
+# group_vars ili host_vars.
+
+_zabbix_db_server_package: >-
+  {{ 'mariadb-server' if role_zabbix_db_engine == 'mariadb'
+     else 'mysql-server' }}
+
+_zabbix_db_service: >-
+  {{ 'mariadb' if role_zabbix_db_engine == 'mariadb' else 'mysql' }}
+
+# MySQL na Ubuntu koristi /etc/mysql/mysql.conf.d/,
+# MariaDB /etc/mysql/mariadb.conf.d/
+_zabbix_db_config_dir: >-
+  {{ '/etc/mysql/mariadb.conf.d' if role_zabbix_db_engine == 'mariadb'
+     else '/etc/mysql/mysql.conf.d' }}
+
+_zabbix_db_config_file: "{{ _zabbix_db_config_dir }}/99-zabbix.cnf"
+
+# Socket kroz koji se Ansible prijavljuje kao root. Na Ubuntu i
+# Debianu root koristi auth_socket, pa lozinka nije potrebna.
+_zabbix_db_login_socket: /run/mysqld/mysqld.sock
