@@ -1,0 +1,7 @@
+---
+# roles/repos/handlers/main.yml
+
+- name: "Osvezi APT kes"
+  ansible.builtin.apt:
+    update_cache: true
+  when: role_repos_update_cache | default(true) | bool
