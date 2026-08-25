@@ -12,6 +12,10 @@
 # Oba dolaze iz bootstrap sablona. U svakodnevnom radu menja se
 # samo hosts.ini.
 #
+# Prefiks grupe:
+#   apply_   — menja stanje onoga sto vec postoji (konfiguracija)
+#   deploy_  — donosi nesto novo na sistem (instalacija)
+#
 # Pokretanje ide preko apply.sh iz radnog foldera:
 #   ./apply.sh --check --diff --limit <host>
 
@@ -39,11 +43,13 @@
   roles:
     - firewall
 
+# Rola se zove etc_hosts jer je "hosts" rezervisana rec u playbook
+# sintaksi.
 - name: Configure /etc/hosts
-  hosts: apply_hosts
+  hosts: apply_etc_hosts
   become: yes
   roles:
-    - hosts
+    - etc_hosts
 
 - name: Configure users
   hosts: apply_users
@@ -53,66 +59,34 @@
 
 
 # =====================================================================
-# PACKAGE TRACKER
+# PAKETI I REPOZITORIJUMI
 # =====================================================================
+# Redosled je bitan: repos mora ici PRE packages i updates.
+# Instalacija iz repozitorijuma koji jos nije dodat bi pala.
 
-- name: Package Manager
-  hosts: package_manager
+- name: Configure package repositories
+  hosts: apply_repos
   become: yes
   roles:
-    - package_manager
+    - repos
+
+- name: Install packages
+  hosts: deploy_packages
+  become: yes
+  roles:
+    - packages
 
 # serial: 1 — host po host, da azuriranje ne obori celu grupu.
-- name: Package Update
-  hosts: package_update
+- name: Update packages
+  hosts: apply_updates
   serial: 1
   become: yes
   roles:
-    - package_update
-
-- name: Package Sync
-  hosts: package_sync
-  become: yes
-  roles:
-    - package_sync
+    - updates
 
 
 # =====================================================================
-# REPOSITORY MANAGEMENT
-# =====================================================================
-
-- name: Deploy custom repository
-  hosts: deploy_custom_repo
-  become: yes
-  roles:
-    - custom_repo
-
-- name: Configure repository
-  hosts: apply_repository
-  become: yes
-  roles:
-    - repository
-
-
-# =====================================================================
-# SYSTEM MAINTENANCE
-# =====================================================================
-
-- name: Update system packages
-  hosts: apply_system_update
-  become: yes
-  roles:
-    - system_update
-
-- name: Install base tools
-  hosts: deploy_tools
-  become: yes
-  roles:
-    - tools
-
-
-# =====================================================================
-# CERTIFICATES
+# SERTIFIKATI
 # =====================================================================
 
 - name: Deploy Root CA
@@ -123,7 +97,7 @@
 
 
 # =====================================================================
-# ZABBIX COMPONENTS
+# ZABBIX
 # =====================================================================
 
 - name: Deploy Zabbix Agent
@@ -156,43 +130,10 @@
   roles:
     - zabbix_proxy
 
+# Ne instalira softver — upisuje hostove, sablone i akcije kroz
+# Zabbix API. Otuda apply_ prefiks.
 - name: Provision Zabbix configuration
-  hosts: zabbix_provisioning
+  hosts: apply_zabbix_provisioning
   become: yes
   roles:
     - zabbix_provisioning
-
-
-# =====================================================================
-# VMWARE
-# =====================================================================
-
-# Bez become — komunikacija ide ka vCenter API-ju, ne ka ciljnom
-# sistemu. Rola se zove vcenter_deploy, grupa deploy_vms.
-- name: Deploy virtual machines from template
-  hosts: deploy_vms
-  roles:
-    - vcenter_deploy
-
-
-# =====================================================================
-# HASHICORP
-# =====================================================================
-
-- name: Deploy HashiCorp
-  hosts: hashicorp_deploy
-  become: yes
-  roles:
-    - hashicorp_deploy
-
-
-# =====================================================================
-# TEMPLATE PREPARATION
-# =====================================================================
-
-# PAZNJA: destruktivno. Ne primenjivati na produkcijske hostove.
-- name: Prepare system for template
-  hosts: system_prep
-  become: yes
-  roles:
-    - system_prep
