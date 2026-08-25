@@ -1,0 +1,113 @@
+---
+# roles/updates/defaults/main.yml
+#
+# Rola "updates" azurira pakete na Debian/Ubuntu sistemima.
+#
+# Aktivacija ide preko clanstva hosta u grupi [apply_updates], koja
+# kroz group_vars/apply_updates.yml postavlja role_updates_enabled.
+#
+# VAZNO: play u playbook.yml koristi serial: 1 — hostovi se azuriraju
+# jedan po jedan, da azuriranje ne obori celu grupu istovremeno.
+#
+# UPOZORENJE: ova rola menja stanje sistema. Nadogradnja paketa moze
+# promeniti ponasanje servisa, a kod kernela zahteva restart da bi
+# izmena pocela da vazi. Pokreni --check --diff pre primene.
+#
+# Redosled u playbook-u: repos → packages → updates.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_updates_enabled: false
+
+
+# =====================================================================
+# OBIM AZURIRANJA
+# =====================================================================
+# Dva medjusobno iskljuciva nacina:
+#
+#   role_updates_all: true    →  azurira CEO sistem
+#   role_updates_packages     →  azurira samo navedene pakete
+#
+# Kada je role_updates_all true, lista role_updates_packages se
+# ignorise. Rola prijavljuje gresku ako je zadato oboje, da ne bi
+# bilo nejasno sta ce se zapravo desiti.
+#
+role_updates_all: false
+
+# Lista paketa za pojedinacno azuriranje.
+#
+#   host_vars/srv-mon-01.yml
+#     role_updates_packages:
+#       - zabbix-agent
+#       - zabbix-sender
+#
+role_updates_packages: []
+
+
+# =====================================================================
+# VRSTA NADOGRADNJE
+# =====================================================================
+# Vazi samo kada je role_updates_all: true.
+#
+#   safe  — nadogradjuje sto moze bez uklanjanja paketa (podrazumevano)
+#   full  — resava zavisnosti i SME da ukloni pakete (apt dist-upgrade)
+#
+# PAZNJA: "full" moze ukloniti paket od kojeg zavisi tvoj servis.
+# Koristi samo kada znas zasto ti treba.
+#
+role_updates_upgrade_type: safe
+
+
+# =====================================================================
+# APT KES
+# =====================================================================
+# Osvezavanje liste paketa pre azuriranja.
+#
+# Za razliku od role "packages", ovde je cache_valid_time namerno
+# nizak — azuriranje bez svezeg kesa nema smisla.
+#
+role_updates_update_cache: true
+role_updates_cache_valid_time: 300
+
+
+# =====================================================================
+# CISCENJE
+# =====================================================================
+# Uklanjanje preuzetih .deb fajlova iz /var/cache/apt/archives posle
+# azuriranja. Oslobadja prostor, bez posledica po sistem.
+#
+role_updates_autoclean: false
+
+# Uklanjanje nekoriscenih zavisnosti.
+#
+# PAZNJA: podrazumevano iskljuceno. autoremove ume da ukloni vise
+# nego sto ocekujes, posebno na serverima gde je nesto instalirano
+# rucno.
+#
+role_updates_autoremove: false
+
+
+# =====================================================================
+# RESTART
+# =====================================================================
+# Rola NIKADA ne restartuje sistem sama.
+#
+# Posle nadogradnje kernela, glibc-a ili libssl-a izmena pocinje da
+# vazi tek posle restarta. Ubuntu i Debian to signaliziraju
+# postojanjem fajla /var/run/reboot-required.
+#
+# Kada je opcija ispod ukljucena, rola taj fajl proverava i jasno
+# prijavljuje da je restart potreban — ali ga ne izvrsava. Restart
+# produkcijskog servera ostaje svesna, rucna odluka.
+#
+role_updates_check_reboot: true
+
+# Kada je true, rola PREKIDA rad ako je restart potreban. Korisno u
+# CI-ju ili kada zelis da azuriranje ne prodje tiho.
+#
+# Podrazumevano false — rola samo ispise upozorenje i nastavi.
+#
+role_updates_fail_on_reboot: false
