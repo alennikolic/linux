@@ -1,0 +1,16 @@
+---
+# bootstrap/template/inventory/group_vars/apply_users.yml
+#
+# Aktivacija role "users" za sve hostove u grupi [apply_users].
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [apply_users] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_users_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+
+role_users_enabled: true
