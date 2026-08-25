@@ -1,0 +1,146 @@
+# bootstrap/template/inventory/hosts.ini.example
+#
+# Preimenuj ovaj fajl u hosts.ini i upisi svoje hostove.
+#
+# Svaka grupa ispod odgovara jednoj roli. Host koji upises u grupu
+# dobija tu rolu; host koji nije naveden ne dobija nista.
+#
+# Isti host se pojavljuje u onoliko grupa koliko rola treba da primi.
+#
+# Aktivacione prekidace (role_<ime>_enabled) postavljaju fajlovi u
+# group_vars/ — njih ne treba dirati.
+
+
+# =====================================================================
+# HOSTOVI
+# =====================================================================
+# Definisi hostove jednom, sa parametrima konekcije, pa ih dalje samo
+# navodi po imenu u grupama ispod.
+
+[all]
+# srv-web-01  ansible_host=10.0.0.11
+# srv-web-02  ansible_host=10.0.0.12
+# srv-db-01   ansible_host=10.0.0.21  ansible_user=admin
+
+
+# =====================================================================
+# SEMANTICKE GRUPE (opciono)
+# =====================================================================
+# Korisne za kaskadno ukljucivanje preko :children, umesto ponavljanja
+# istih hostova u vise aktivacionih grupa.
+
+[webservers]
+# srv-web-01
+# srv-web-02
+
+[dbservers]
+# srv-db-01
+
+
+# =====================================================================
+# OSNOVNA KONFIGURACIJA SISTEMA
+# =====================================================================
+
+[apply_timezone]
+# Vremenska zona i sinhronizacija vremena.
+
+[apply_banner]
+# Sadrzaj /etc/motd.
+
+[apply_firewall]
+# Pravila zastitnog zida.
+# PAZNJA: pogresna pravila mogu prekinuti SSH pristup.
+
+[apply_hosts]
+# Unosi u /etc/hosts.
+
+[apply_users]
+# Nalozi, grupe i SSH kljucevi.
+
+
+# =====================================================================
+# UPRAVLJANJE PAKETIMA
+# =====================================================================
+
+[package_manager]
+# Konfiguracija menadzera paketa.
+
+[package_update]
+# Azuriranje paketa. Play koristi serial: 1 — host po host.
+
+[package_sync]
+# Sinhronizacija stanja paketa.
+
+
+# =====================================================================
+# REPOZITORIJUMI
+# =====================================================================
+
+[deploy_custom_repo]
+# Interni repozitorijum.
+
+[apply_repository]
+# Sistemski repozitorijumi.
+
+
+# =====================================================================
+# ODRZAVANJE SISTEMA
+# =====================================================================
+
+[apply_system_update]
+# Nadogradnja sistema.
+
+[deploy_tools]
+# Osnovni alati.
+
+# Primer kaskadnog ukljucivanja:
+# [deploy_tools:children]
+# webservers
+# dbservers
+
+
+# =====================================================================
+# SERTIFIKATI
+# =====================================================================
+
+[deploy_root_ca]
+# Instalacija Root CA sertifikata.
+
+
+# =====================================================================
+# ZABBIX
+# =====================================================================
+
+[deploy_zabbix_agent]
+
+[deploy_zabbix_db]
+
+[deploy_zabbix_server]
+
+[deploy_zabbix_web]
+
+[deploy_zabbix_proxy]
+
+[zabbix_provisioning]
+# Hostovi, sabloni i akcije u Zabbix-u.
+
+
+# =====================================================================
+# VIRTUELIZACIJA I PLATFORME
+# =====================================================================
+
+[deploy_vms]
+# Kreiranje virtuelnih masina iz sablona.
+# Play se izvrsava BEZ become — komunicira sa vCenter API-jem.
+
+[hashicorp_deploy]
+# HashiCorp komponente.
+
+
+# =====================================================================
+# PRIPREMA SABLONA
+# =====================================================================
+
+[system_prep]
+# Ciscenje sistema pre pravljenja sablona.
+# PAZNJA: destruktivno. Ne primenjivati na produkcijske hostove.
