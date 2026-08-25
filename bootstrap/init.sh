@@ -9,7 +9,7 @@
 # skripta prekida rad i ne dira nijedan postojeći fajl.
 #
 # Upotreba:
-#   ./bootstrap/init.sh [ciljni_folder]
+#   bash bootstrap/init.sh [ciljni_folder]
 #
 # Podrazumevani ciljni folder je ../production, relativno u odnosu
 # na koren repozitorijuma.
