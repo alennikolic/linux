@@ -1,0 +1,8 @@
+---
+# roles/zabbix_agent/handlers/main.yml
+
+- name: "Restartuj Zabbix agenta"
+  ansible.builtin.service:
+    name: "{{ _zabbix_agent_service }}"
+    state: restarted
+  when: role_zabbix_agent_service_state != 'stopped'
