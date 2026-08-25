@@ -1,0 +1,23 @@
+---
+# roles/zabbix_agent/vars/main.yml
+#
+# Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
+# group_vars ili host_vars.
+#
+# Putanje se razlikuju izmedju zabbix-agent i zabbix-agent2, pa se
+# izvode iz imena paketa umesto da se zadaju rucno.
+
+# zabbix-agent   → /etc/zabbix/zabbix_agentd.conf
+# zabbix-agent2  → /etc/zabbix/zabbix_agent2.conf
+_zabbix_agent_config_file: >-
+  {{ '/etc/zabbix/zabbix_agent2.conf'
+     if role_zabbix_agent_package == 'zabbix-agent2'
+     else '/etc/zabbix/zabbix_agentd.conf' }}
+
+_zabbix_agent_include_dir: >-
+  {{ '/etc/zabbix/zabbix_agent2.d'
+     if role_zabbix_agent_package == 'zabbix-agent2'
+     else '/etc/zabbix/zabbix_agentd.d' }}
+
+# Ime servisa se poklapa sa imenom paketa.
+_zabbix_agent_service: "{{ role_zabbix_agent_package }}"
