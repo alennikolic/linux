@@ -1,0 +1,167 @@
+---
+# roles/zabbix_db/defaults/main.yml
+#
+# Rola "zabbix_db" instalira bazu podataka i priprema je za Zabbix
+# server.
+#
+# Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_db],
+# koja kroz group_vars/deploy_zabbix_db.yml postavlja
+# role_zabbix_db_enabled.
+#
+# PODELA POSLA SA ROLOM zabbix_server:
+#   zabbix_db      — instalira bazu, kreira PRAZNU bazu i korisnika
+#   zabbix_server  — uvozi semu (skripte dolaze uz njegov paket)
+#
+# Rola NE uvozi semu i NE dira postojece podatke. Bezbedno je
+# pokrenuti je ponovo nad vec podesenom bazom.
+#
+# =====================================================================
+# UPOZORENJE
+# =====================================================================
+# Instalacija baze na host koji vec ima MySQL/MariaDB moze izmeniti
+# konfiguraciju kroz fajl 99-zabbix.cnf. Ako na hostu radi druga
+# aplikacija koja koristi istu bazu, proveri podesavanja pre primene.
+# =====================================================================
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_zabbix_db_enabled: false
+
+
+# =====================================================================
+# IZBOR MOTORA
+# =====================================================================
+# mysql   — MySQL Community Server (podrazumevano)
+# mariadb — MariaDB
+#
+# Oba rade sa Zabbix-om. MariaDB je uobicajen izbor na Debianu,
+# MySQL na Ubuntu. Izbor odredjuje ime paketa, servisa i foldera za
+# konfiguraciju — rola ih sama izvodi.
+#
+role_zabbix_db_engine: mysql
+
+# Kada je false, rola preskace instalaciju paketa i samo kreira bazu
+# i korisnika. Koristi kada bazom upravlja neko drugi ili kada je
+# vec instalirana.
+#
+role_zabbix_db_install_server: true
+
+
+# =====================================================================
+# BAZA I KORISNIK
+# =====================================================================
+
+role_zabbix_db_name: zabbix
+role_zabbix_db_user: zabbix
+
+# OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
+#
+# Mora biti ISTA kao role_zabbix_server_db_password u roli
+# zabbix_server. Najlakse je definisati je jednom:
+#
+#   host_vars/srv-mon-01.yml
+#     _zabbix_db_pass: !vault |
+#       $ANSIBLE_VAULT;1.1;AES256
+#       62313436...
+#     role_zabbix_db_password: "{{ _zabbix_db_pass }}"
+#     role_zabbix_server_db_password: "{{ _zabbix_db_pass }}"
+#
+# Lozinku sifruj sa:
+#   ansible-vault encrypt_string 'lozinka' --name '_zabbix_db_pass'
+#
+role_zabbix_db_password: ""
+
+# Sa kog hosta se korisnik sme prijaviti.
+#
+#   localhost      — baza i server na istom hostu (podrazumevano)
+#   10.0.0.50      — Zabbix server na drugom hostu
+#   10.0.0.%       — cela podmreza
+#   %              — bilo odakle (NE preporucuje se)
+#
+role_zabbix_db_user_host: localhost
+
+
+# =====================================================================
+# KODNI RASPORED
+# =====================================================================
+# Zabbix ZAHTEVA utf8mb4 sa utf8mb4_bin kolacijom.
+#
+# Sa podrazumevanom utf8mb4_0900_ai_ci uvoz seme prolazi, ali
+# frontend kasnije prijavljuje gresku o pogresnoj kolaciji. Ne menjaj
+# ove vrednosti osim ako tacno znas zasto.
+#
+role_zabbix_db_encoding: utf8mb4
+role_zabbix_db_collation: utf8mb4_bin
+
+
+# =====================================================================
+# MREZA
+# =====================================================================
+# Adresa na kojoj baza slusa.
+#
+#   127.0.0.1  — samo lokalno (podrazumevano, najbezbednije)
+#   0.0.0.0    — sve adrese, potrebno kada je Zabbix server na
+#                drugom hostu
+#
+# PAZNJA: uz 0.0.0.0 obavezno ogranici pristup kroz rolu "firewall".
+# Baza otvorena prema celoj mrezi je ozbiljan rizik.
+#
+role_zabbix_db_bind_address: "127.0.0.1"
+
+role_zabbix_db_port: 3306
+
+
+# =====================================================================
+# PODESAVANJA PERFORMANSI
+# =====================================================================
+# Upisuju se u zaseban fajl, ne u glavnu konfiguraciju. Tako
+# nadogradnja paketa ne prepisuje izmene.
+#
+# Vrednosti odgovaraju malom okruzenju (do ~100 hostova) na serveru
+# sa 4 GB RAM-a. Za vece instalacije povecavaj postepeno.
+
+# Najvaznije podesavanje. Preporuka je 50-70% dostupne memorije na
+# namenskom serveru baze.
+role_zabbix_db_innodb_buffer_pool_size: 1G
+
+# Broj instanci bafera. Preporuka: jedna po gigabajtu bafera.
+role_zabbix_db_innodb_buffer_pool_instances: 1
+
+# Velicina log fajla. Vece vrednosti ubrzavaju upis ali produzavaju
+# oporavak posle pada.
+role_zabbix_db_innodb_log_file_size: 256M
+
+# 1 = najsigurnije, upis na disk pri svakoj transakciji
+# 2 = brze, moguc gubitak do 1 sekunde pri padu SISTEMA
+#
+# Za monitoring podatke je 2 prihvatljiv kompromis.
+role_zabbix_db_innodb_flush_log_at_trx_commit: 2
+
+# Maksimalan broj konekcija.
+#
+# PAZNJA: mora biti veci od zbira svih Start* procesa Zabbix servera,
+# uz rezervu za frontend i rucne prijave.
+role_zabbix_db_max_connections: 200
+
+# Najveci paket koji baza prihvata. Zabbix ume da salje velike
+# upite pri masovnom upisu.
+role_zabbix_db_max_allowed_packet: 64M
+
+# Proizvoljne dodatne linije u konfiguraciji.
+#
+#   role_zabbix_db_extra_config: |
+#     innodb_io_capacity = 2000
+#     innodb_flush_method = O_DIRECT
+#
+role_zabbix_db_extra_config: ""
+
+
+# =====================================================================
+# SERVIS
+# =====================================================================
+
+role_zabbix_db_service_enabled: true
+role_zabbix_db_service_state: started
