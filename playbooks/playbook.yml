@@ -1,0 +1,198 @@
+---
+# playbooks/playbook.yml
+#
+# Glavni playbook. Svaki play cilja tacno jednu namensku inventory
+# grupu i pokrece jednu rolu.
+#
+# Aktivacija:
+#   1. Host se upisuje u grupu u inventory/hosts.ini
+#   2. Grupi pripada group_vars/<grupa>.yml koji postavlja
+#      role_<ime>_enabled: true
+#
+# Oba dolaze iz bootstrap sablona. U svakodnevnom radu menja se
+# samo hosts.ini.
+#
+# Pokretanje ide preko apply.sh iz radnog foldera:
+#   ./apply.sh --check --diff --limit <host>
+
+
+# =====================================================================
+# OSNOVNA KONFIGURACIJA SISTEMA
+# =====================================================================
+
+- name: Apply timezone configuration
+  hosts: apply_timezone
+  become: yes
+  roles:
+    - timezone
+
+- name: Configure login banner
+  hosts: apply_banner
+  become: yes
+  roles:
+    - banner
+
+# PAZNJA: pogresna pravila mogu prekinuti SSH pristup.
+- name: Configure firewall
+  hosts: apply_firewall
+  become: yes
+  roles:
+    - firewall
+
+- name: Configure /etc/hosts
+  hosts: apply_hosts
+  become: yes
+  roles:
+    - hosts
+
+- name: Configure users
+  hosts: apply_users
+  become: yes
+  roles:
+    - users
+
+
+# =====================================================================
+# PACKAGE TRACKER
+# =====================================================================
+
+- name: Package Manager
+  hosts: package_manager
+  become: yes
+  roles:
+    - package_manager
+
+# serial: 1 — host po host, da azuriranje ne obori celu grupu.
+- name: Package Update
+  hosts: package_update
+  serial: 1
+  become: yes
+  roles:
+    - package_update
+
+- name: Package Sync
+  hosts: package_sync
+  become: yes
+  roles:
+    - package_sync
+
+
+# =====================================================================
+# REPOSITORY MANAGEMENT
+# =====================================================================
+
+- name: Deploy custom repository
+  hosts: deploy_custom_repo
+  become: yes
+  roles:
+    - custom_repo
+
+- name: Configure repository
+  hosts: apply_repository
+  become: yes
+  roles:
+    - repository
+
+
+# =====================================================================
+# SYSTEM MAINTENANCE
+# =====================================================================
+
+- name: Update system packages
+  hosts: apply_system_update
+  become: yes
+  roles:
+    - system_update
+
+- name: Install base tools
+  hosts: deploy_tools
+  become: yes
+  roles:
+    - tools
+
+
+# =====================================================================
+# CERTIFICATES
+# =====================================================================
+
+- name: Deploy Root CA
+  hosts: deploy_root_ca
+  become: yes
+  roles:
+    - root_ca
+
+
+# =====================================================================
+# ZABBIX COMPONENTS
+# =====================================================================
+
+- name: Deploy Zabbix Agent
+  hosts: deploy_zabbix_agent
+  become: yes
+  roles:
+    - zabbix_agent
+
+- name: Deploy Zabbix Database
+  hosts: deploy_zabbix_db
+  become: yes
+  roles:
+    - zabbix_db
+
+- name: Deploy Zabbix Server
+  hosts: deploy_zabbix_server
+  become: yes
+  roles:
+    - zabbix_server
+
+- name: Deploy Zabbix Web
+  hosts: deploy_zabbix_web
+  become: yes
+  roles:
+    - zabbix_web
+
+- name: Deploy Zabbix Proxy
+  hosts: deploy_zabbix_proxy
+  become: yes
+  roles:
+    - zabbix_proxy
+
+- name: Provision Zabbix configuration
+  hosts: zabbix_provisioning
+  become: yes
+  roles:
+    - zabbix_provisioning
+
+
+# =====================================================================
+# VMWARE
+# =====================================================================
+
+# Bez become — komunikacija ide ka vCenter API-ju, ne ka ciljnom
+# sistemu. Rola se zove vcenter_deploy, grupa deploy_vms.
+- name: Deploy virtual machines from template
+  hosts: deploy_vms
+  roles:
+    - vcenter_deploy
+
+
+# =====================================================================
+# HASHICORP
+# =====================================================================
+
+- name: Deploy HashiCorp
+  hosts: hashicorp_deploy
+  become: yes
+  roles:
+    - hashicorp_deploy
+
+
+# =====================================================================
+# TEMPLATE PREPARATION
+# =====================================================================
+
+# PAZNJA: destruktivno. Ne primenjivati na produkcijske hostove.
+- name: Prepare system for template
+  hosts: system_prep
+  become: yes
+  roles:
+    - system_prep
