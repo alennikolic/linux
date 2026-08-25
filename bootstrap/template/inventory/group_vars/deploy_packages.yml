@@ -1,0 +1,19 @@
+---
+# bootstrap/template/inventory/group_vars/deploy_packages.yml
+#
+# Aktivacija role "packages" za sve hostove u grupi [deploy_packages].
+#
+# Rola instalira i uklanja pakete prema listama role_packages_install
+# i role_packages_remove.
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [deploy_packages] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_packages_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+
+role_packages_enabled: true
