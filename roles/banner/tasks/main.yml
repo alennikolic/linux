@@ -1,0 +1,41 @@
+---
+# roles/banner/tasks/main.yml
+#
+# Upisuje poruke za prijavu na sistem:
+#   /etc/motd       — posle prijave
+#   /etc/issue      — pre prijave, lokalna konzola  (opciono)
+#   /etc/issue.net  — pre prijave, SSH              (opciono)
+
+- name: "Upravljanje banerima za prijavu"
+  block:
+
+    - name: "Postavljanje /etc/motd"
+      ansible.builtin.copy:
+        content: "{{ role_banner_text | default(role_banner_default_text, true) }}"
+        dest: /etc/motd
+        owner: "{{ role_banner_owner }}"
+        group: "{{ role_banner_group }}"
+        mode: "{{ role_banner_mode }}"
+        backup: "{{ role_banner_backup | bool }}"
+
+    - name: "Postavljanje /etc/issue"
+      ansible.builtin.copy:
+        content: "{{ role_banner_issue_text | default(role_banner_text, true) | default(role_banner_default_text, true) }}"
+        dest: /etc/issue
+        owner: "{{ role_banner_owner }}"
+        group: "{{ role_banner_group }}"
+        mode: "{{ role_banner_mode }}"
+        backup: "{{ role_banner_backup | bool }}"
+      when: role_banner_issue_enabled | default(false) | bool
+
+    - name: "Postavljanje /etc/issue.net"
+      ansible.builtin.copy:
+        content: "{{ role_banner_issue_net_text | default(role_banner_text, true) | default(role_banner_default_text, true) }}"
+        dest: /etc/issue.net
+        owner: "{{ role_banner_owner }}"
+        group: "{{ role_banner_group }}"
+        mode: "{{ role_banner_mode }}"
+        backup: "{{ role_banner_backup | bool }}"
+      when: role_banner_issue_net_enabled | default(false) | bool
+
+  when: role_banner_enabled | default(false) | bool
