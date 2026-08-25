@@ -1,0 +1,51 @@
+---
+# roles/zabbix_agent/defaults/main.yml
+#
+# Rola "zabbix_agent" instalira i konfigurise Zabbix agenta.
+#
+# Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_agent],
+# koja kroz group_vars/deploy_zabbix_agent.yml postavlja
+# role_zabbix_agent_enabled.
+#
+# PREDUSLOV: Zabbix repozitorijum mora biti dodat pre ove role.
+# To radi rola "repos" — host mora biti i u grupi [apply_repos].
+# Rola proverava dostupnost paketa i prekida rad sa jasnom porukom
+# ako repozitorijum nedostaje.
+#
+# Rola upisuje SOPSTVENI konfiguracioni fajl iz sablona, umesto da
+# menja onaj koji dolazi uz paket. Tako je sadrzaj predvidljiv, a
+# nadogradnja paketa ne ostavlja .dpkg-dist fajlove.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_zabbix_agent_enabled: false
+
+
+# =====================================================================
+# IZBOR AGENTA
+# =====================================================================
+# zabbix-agent   — klasican agent, pisan u C-u
+# zabbix-agent2  — noviji agent, pisan u Go-u, podrzava dodatke
+#
+# Ime paketa odredjuje i ime servisa, putanju konfiguracije i
+# include foldera — rola ih sama izvodi.
+#
+role_zabbix_agent_package: zabbix-agent
+
+# Zakovana verzija. Prazna vrednost instalira najnoviju dostupnu.
+#
+#   role_zabbix_agent_version: "1:7.0.19-1+ubuntu24.04"
+#
+# Dostupne verzije vidis sa:
+#   apt-cache madison zabbix-agent
+#
+# NAPOMENA: zakovana verzija sprecava nadogradnju kroz rolu "updates".
+#
+role_zabbix_agent_version: ""
+
+
+# =====================================================================
+# ADRESA ZABBIX
