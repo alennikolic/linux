@@ -1,0 +1,15 @@
+---
+# bootstrap/template/inventory/group_vars/bootstrap.yml
+#
+# Aktivacija role "ansible_user" za sve hostove u grupi [bootstrap].
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [bootstrap] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# NAPOMENA: grupa nema apply_ ni deploy_ prefiks jer se ne pokrece
+# kroz playbook.yml, nego kroz zaseban playbooks/bootstrap.yml.
+#
+# SSH kljuc je OBAVEZAN i upisuje se u group_vars/all.yml:
+#   role_ansible_user_ssh_key: "ssh-ed25519 AAAAC3Nz... ansible@control"
+
+role_ansible_user_enabled: true
