@@ -1,0 +1,138 @@
+---
+# roles/zabbix_web/defaults/main.yml
+#
+# Rola "zabbix_web" instalira i konfigurise Zabbix web frontend.
+#
+# Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_web],
+# koja kroz group_vars/deploy_zabbix_web.yml postavlja
+# role_zabbix_web_enabled.
+#
+# PREDUSLOVI:
+#   1. Zabbix repozitorijum — rola "repos", grupa [apply_repos]
+#   2. Baza sa uvezenom semom — role "zabbix_db" i "zabbix_server"
+#
+# Frontend NE mora biti na istom hostu kao Zabbix server, ali mora
+# imati mrezni pristup do BAZE. Frontend cita bazu direktno, ne kroz
+# server.
+#
+# Rola upisuje zabbix.conf.php i time preskace carobnjak za
+# instalaciju koji se inace pojavljuje pri prvom otvaranju frontenda.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_zabbix_web_enabled: false
+
+
+# =====================================================================
+# WEB SERVER
+# =====================================================================
+# nginx  — podrazumevano
+# apache — Apache 2.4
+#
+# Izbor odredjuje ime konfiguracionog paketa, servisa i putanju
+# konfiguracije. Rola ih sama izvodi.
+#
+role_zabbix_web_server: nginx
+
+# Zakovana verzija Zabbix paketa. Prazna vrednost instalira najnoviju.
+role_zabbix_web_version: ""
+
+
+# =====================================================================
+# VEZA SA BAZOM
+# =====================================================================
+# Frontend cita bazu DIREKTNO. Ove vrednosti se moraju poklapati sa
+# onima iz role zabbix_db.
+#
+role_zabbix_web_db_host: localhost
+role_zabbix_web_db_port: 3306
+role_zabbix_web_db_name: zabbix
+role_zabbix_web_db_user: zabbix
+
+# OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
+#
+# Mora biti ISTA kao role_zabbix_db_password. Najlakse je definisati
+# je jednom, u host_vars:
+#
+#   _zabbix_db_pass: !vault | ...
+#   role_zabbix_db_password: "{{ _zabbix_db_pass }}"
+#   role_zabbix_server_db_password: "{{ _zabbix_db_pass }}"
+#   role_zabbix_web_db_password: "{{ _zabbix_db_pass }}"
+#
+role_zabbix_web_db_password: ""
+
+# mysql — MySQL, MariaDB (podrazumevano)
+# pgsql — PostgreSQL
+role_zabbix_web_db_backend: mysql
+
+
+# =====================================================================
+# VEZA SA ZABBIX SERVEROM
+# =====================================================================
+# Frontend se javlja serveru samo za neke radnje (izvrsavanje skripti,
+# provera dostupnosti). Vecinu podataka cita iz baze.
+#
+role_zabbix_web_server_host: localhost
+role_zabbix_web_server_port: 10051
+
+# Ime koje se prikazuje u naslovu stranice i zaglavlju.
+# Prazna vrednost koristi Zabbix podrazumevano.
+#
+#   role_zabbix_web_server_name: "Monitoring — Produkcija"
+#
+role_zabbix_web_server_name: ""
+
+
+# =====================================================================
+# WEB SERVER — MREZA
+# =====================================================================
+
+role_zabbix_web_listen_port: 8080
+
+# Ime hosta pod kojim se frontend servira. Zvezdica prihvata sve.
+#
+#   role_zabbix_web_hostname: "zabbix.example.com"
+#
+role_zabbix_web_hostname: "_"
+
+# Adresa na kojoj web server slusa. Prazna vrednost znaci sve adrese.
+role_zabbix_web_listen_address: ""
+
+
+# =====================================================================
+# PHP
+# =====================================================================
+# Zabbix 7.0 zahteva PHP 8.0 ili noviji. Vrednosti ispod su
+# minimalne koje Zabbix trazi — nize vrednosti frontend odbija.
+#
+role_zabbix_web_php_max_execution_time: 300
+role_zabbix_web_php_memory_limit: 128M
+role_zabbix_web_php_post_max_size: 16M
+role_zabbix_web_php_upload_max_filesize: 2M
+role_zabbix_web_php_max_input_time: 300
+
+# Vremenska zona PHP-a. Utice na prikaz vremena u frontendu.
+role_zabbix_web_php_timezone: Europe/Belgrade
+
+
+# =====================================================================
+# DODATNA KONFIGURACIJA
+# =====================================================================
+# Proizvoljne PHP linije koje se dodaju u zabbix.conf.php.
+#
+#   role_zabbix_web_extra_config: |
+#     $DB['ENCRYPTION'] = true;
+#     $DB['VERIFY_HOST'] = false;
+#
+role_zabbix_web_extra_config: ""
+
+
+# =====================================================================
+# SERVIS
+# =====================================================================
+
+role_zabbix_web_service_enabled: true
+role_zabbix_web_service_state: started
