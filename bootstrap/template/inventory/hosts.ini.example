@@ -7,6 +7,10 @@
 #
 # Isti host se pojavljuje u onoliko grupa koliko rola treba da primi.
 #
+# Prefiks grupe:
+#   apply_   — menja stanje onoga sto vec postoji (konfiguracija)
+#   deploy_  — donosi nesto novo na sistem (instalacija)
+#
 # Aktivacione prekidace (role_<ime>_enabled) postavljaju fajlovi u
 # group_vars/ — njih ne treba dirati.
 
@@ -51,7 +55,7 @@
 # Pravila zastitnog zida.
 # PAZNJA: pogresna pravila mogu prekinuti SSH pristup.
 
-[apply_hosts]
+[apply_etc_hosts]
 # Unosi u /etc/hosts.
 
 [apply_users]
@@ -59,44 +63,27 @@
 
 
 # =====================================================================
-# UPRAVLJANJE PAKETIMA
+# PAKETI I REPOZITORIJUMI
 # =====================================================================
+# Redosled u playbook-u: repos → packages → updates.
 
-[package_manager]
-# Konfiguracija menadzera paketa.
+[apply_repos]
+# Sistemski i interni repozitorijumi.
+# Parametri: role_repos_list, role_repos_gpg_check, role_repos_remove
 
-[package_update]
-# Azuriranje paketa. Play koristi serial: 1 — host po host.
-
-[package_sync]
-# Sinhronizacija stanja paketa.
-
-
-# =====================================================================
-# REPOZITORIJUMI
-# =====================================================================
-
-[deploy_custom_repo]
-# Interni repozitorijum.
-
-[apply_repository]
-# Sistemski repozitorijumi.
-
-
-# =====================================================================
-# ODRZAVANJE SISTEMA
-# =====================================================================
-
-[apply_system_update]
-# Nadogradnja sistema.
-
-[deploy_tools]
-# Osnovni alati.
+[deploy_packages]
+# Instalacija i uklanjanje paketa.
+# Parametri: role_packages_install, role_packages_remove
 
 # Primer kaskadnog ukljucivanja:
-# [deploy_tools:children]
+# [deploy_packages:children]
 # webservers
 # dbservers
+
+[apply_updates]
+# Azuriranje celog sistema ili pojedinacnih paketa.
+# Parametri: role_updates_all, role_updates_packages, role_updates_reboot
+# Play koristi serial: 1 — host po host.
 
 
 # =====================================================================
@@ -121,26 +108,6 @@
 
 [deploy_zabbix_proxy]
 
-[zabbix_provisioning]
-# Hostovi, sabloni i akcije u Zabbix-u.
-
-
-# =====================================================================
-# VIRTUELIZACIJA I PLATFORME
-# =====================================================================
-
-[deploy_vms]
-# Kreiranje virtuelnih masina iz sablona.
-# Play se izvrsava BEZ become — komunicira sa vCenter API-jem.
-
-[hashicorp_deploy]
-# HashiCorp komponente.
-
-
-# =====================================================================
-# PRIPREMA SABLONA
-# =====================================================================
-
-[system_prep]
-# Ciscenje sistema pre pravljenja sablona.
-# PAZNJA: destruktivno. Ne primenjivati na produkcijske hostove.
+[apply_zabbix_provisioning]
+# Hostovi, sabloni i akcije kroz Zabbix API.
+# Ne instalira softver — otuda apply_ prefiks.
