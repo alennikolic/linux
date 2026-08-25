@@ -29,7 +29,7 @@ linux/
 | Nije u repozitorijumu | Gde se nalazi |
 |---|---|
 | `inventory/` sa stvarnim hostovima | privatni folder na kontrolnom čvoru |
-| Popunjeni `group_vars/`, `host_vars/` | isto |
+| Popunjeni `host_vars/`, `group_vars/all.yml` | isto |
 | Aktivan `ansible.cfg` | isto (kreira ga `init.sh`) |
 | Vault lozinke, sertifikati, ključevi | isto, nikada u git |
 
@@ -39,14 +39,77 @@ Sve vrednosti u `roles/*/defaults/main.yml` su neutralni podrazumevani parametri
 
 ## Princip rada
 
-Aktivacija role je **dvostepena**. Oba uslova moraju biti ispunjena da bi se rola izvršila nad hostom:
+Svaka rola ima svoj prekidač `role_<ime>_enabled`, čija je podrazumevana vrednost u `defaults/main.yml` uvek `false`. Taskovi role su omotani u:
 
-1. **Članstvo u grupi** — svaki play u `playbook.yml` cilja tačno određenu inventory grupu. Ako host nije u grupi, play ga preskače.
-2. **Enable varijabla** — taskovi unutar role su omotani u `when: role_<ime>_enabled | bool`. Podrazumevana vrednost je uvek `false`.
+```yaml
+when: role_<ime>_enabled | default(false) | bool
+```
 
-> **Napomena:** ako je host u grupi ali `role_<ime>_enabled` nije postavljen na `true`, playbook će prijaviti `skipped`, a ne `changed`. Ovo je najčešći uzrok zabune pri prvom podešavanju.
+Podrazumevano stanje je dakle **„ne diraj ništa"**.
 
-Ovakav pristup znači da je **podrazumevano stanje uvek „ne diraj ništa"**. Rola mora biti eksplicitno uključena na oba nivoa.
+### Aktivacija ide preko grupe
+
+Prekidač ne uključuješ ručno. Svakoj namenskoj grupi pripada `group_vars` fajl koji postavlja odgovarajući flag:
+
+```yaml
+# inventory/group_vars/apply_banner.yml
+role_banner_enabled: true
+```
+
+Ovi fajlovi dolaze gotovi iz `bootstrap/template/` i posle inicijalizacije se ne diraju.
+
+Praktična posledica: **u svakodnevnom radu uređuješ samo `hosts.ini`.**
+
+```ini
+[apply_banner]
+srv-web-01        # dobija baner
+srv-web-02        # dobija baner
+                  # srv-db-01 nije naveden → ne dobija ništa
+```
+
+Članstvo u grupi je jedini izvor istine. Provera bez otvaranja ijednog fajla:
+
+```bash
+ansible-inventory --graph
+ansible-inventory --host srv-web-01
+```
+
+### Izuzetak po hostu
+
+Pošto `host_vars` ima viši prioritet od `group_vars`, host može ostati u grupi a da rola nad njim bude privremeno isključena:
+
+```yaml
+# inventory/host_vars/srv-db-01.yml
+role_banner_enabled: false    # u grupi je, ali privremeno preskoči
+```
+
+Korisno kada host ne sme da se dira, a ne želiš da izgubiš trag da inače pripada toj grupi. Playbook će prijaviti `skipped`.
+
+### Kaskadno uključivanje
+
+Ako više grupa servera treba da dobije istu rolu, koristi `children` umesto ponavljanja hostova:
+
+```ini
+[webservers]
+srv-web-01
+srv-web-02
+
+[dbservers]
+srv-db-01
+
+[deploy_tools:children]
+webservers
+dbservers
+```
+
+### Isključivanje pri pokretanju
+
+Privremeno izuzimanje ne zahteva izmenu inventory-ja:
+
+```bash
+./apply.sh --limit '!apply_system_update'    # preskoči jednu grupu
+./apply.sh --limit apply_banner              # pokreni samo jednu
+```
 
 ---
 
@@ -75,7 +138,7 @@ Kod i konfiguracija stoje kao dva odvojena direktorijuma, jedan pored drugog:
     ├── .gitignore
     └── inventory/
         ├── hosts.ini
-        ├── group_vars/
+        ├── group_vars/       # po jedan fajl za svaku grupu
         └── host_vars/
 ```
 
@@ -103,10 +166,11 @@ Skripta namerno **ne** pokreće `git init` u ciljnom folderu. Ako želiš da ver
 ```bash
 cd /opt/ansible/production
 mv inventory/hosts.ini.example inventory/hosts.ini
-mv inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 ```
 
-Zatim uredi oba fajla prema svom okruženju.
+Uredi `hosts.ini` prema svom okruženju — sadrži spisak svih dostupnih grupa, praznih. Upisuješ samo hostove koje želiš.
+
+Fajlove u `group_vars/` ne treba dirati; oni već postavljaju odgovarajuće `role_*_enabled` prekidače.
 
 ### 4. Provera
 
@@ -122,33 +186,20 @@ Zatim uredi oba fajla prema svom okruženju.
 git -C /opt/ansible/linux pull
 ```
 
-Konfiguracija se ne dira — kod i podaci su potpuno razdvojeni. Ako novo izdanje donese promene u `bootstrap/template/`, uporedi ih ručno sa svojim folderom; `init.sh` nikada ne prepisuje postojeće fajlove.
+Konfiguracija se ne dira — kod i podaci su potpuno razdvojeni.
+
+Nakon `pull`-a proveri da li je dodata nova grupa:
+
+```bash
+diff <(grep '^\[' linux/bootstrap/template/inventory/hosts.ini.example) \
+     <(grep '^\[' production/inventory/hosts.ini)
+```
+
+Ako jeste, dodaj je u svoj `hosts.ini` i prekopiraj pripadajući `group_vars` fajl iz šablona. `init.sh` nikada ne prepisuje postojeće fajlove.
 
 ---
 
 ## Konfiguracija inventory-ja
-
-### `inventory/hosts.ini`
-
-Host se u grupu upisuje samo ako želiš da odgovarajuća rola bude primenjena nad njim:
-
-```ini
-[apply_timezone]
-srv-web-01
-srv-web-02
-srv-db-01
-
-[apply_banner]
-srv-web-01
-srv-web-02
-srv-db-01
-
-[deploy_tools]
-srv-web-01
-srv-web-02
-```
-
-Isti host se pojavljuje u onoliko grupa koliko rola treba da primi.
 
 ### Prioritet varijabli
 
@@ -157,6 +208,8 @@ Od najnižeg ka najvišem:
 ```text
 roles/<rola>/defaults/main.yml   →   group_vars/all.yml   →   group_vars/<grupa>.yml   →   host_vars/<host>.yml
 ```
+
+Aktivacione flagove postavlja `group_vars/<grupa>.yml`. Parametre role menjaj u `group_vars/all.yml` (globalno) ili `host_vars/<host>.yml` (za pojedinačan host).
 
 ### Konvencija imenovanja
 
@@ -170,19 +223,21 @@ Svaka rola ima potpunu dokumentaciju varijabli sa primerima u sopstvenom `defaul
 
 ---
 
-## Primer: uključivanje role
+## Primer: primena role
 
 Na primeru role `banner`, koja upravlja sadržajem `/etc/motd`:
 
-**1.** Dodaj hostove u grupu `apply_banner` u `hosts.ini`.
+**1.** Dodaj hostove u grupu `apply_banner` u `hosts.ini`:
 
-**2.** Uključi rolu u `group_vars/all.yml`:
-
-```yaml
-role_banner_enabled: true
+```ini
+[apply_banner]
+srv-web-01
+srv-web-02
 ```
 
-**3.** Po potrebi definiši prilagođenu vrednost u `host_vars/srv-web-01.yml`:
+**2.** To je dovoljno. `group_vars/apply_banner.yml` već postavlja `role_banner_enabled: true`, pa se rola primenjuje sa podrazumevanim tekstom iz `defaults/main.yml`.
+
+**3.** Po potrebi prilagodi sadržaj u `host_vars/srv-web-01.yml`:
 
 ```yaml
 role_banner_text: |
@@ -193,7 +248,7 @@ role_banner_text: |
   *****************************************************************
 ```
 
-Ako `role_banner_text` nije definisan, koristi se `role_banner_default_text` iz `defaults/main.yml`.
+Ako `role_banner_text` nije definisan, koristi se `role_banner_default_text`.
 
 ---
 
@@ -220,7 +275,7 @@ cd /opt/ansible/production
 ./apply.sh -vv
 ```
 
-Pre primene nad produkcijom preporučuje se `--check --diff` uz `--limit` na jedan host.
+Pre prve primene nad produkcijom pokreni `--check --diff` uz `--limit` na jedan host. Role koje menjaju stanje sistema nepovratno su kao takve označene na vrhu svog `defaults/main.yml`.
 
 ---
 
@@ -230,10 +285,14 @@ Da bi rola bila u skladu sa ostatkom projekta:
 
 1. Kreiraj `roles/<ime>/` sa `defaults/`, `tasks/` i po potrebi `handlers/` i `templates/`.
 2. U `defaults/main.yml` definiši `role_<ime>_enabled: false` uz komentar i primer korišćenja.
-3. Sve ostale varijable prefiksiraj sa `role_<ime>_`.
+3. Sve ostale varijable prefiksiraj sa `role_<ime>_` i dokumentuj ih na istom mestu.
 4. U `tasks/main.yml` omotaj taskove u `block:` sa `when: role_<ime>_enabled | default(false) | bool`.
-5. U `playbooks/playbook.yml` dodaj play sa odgovarajućom inventory grupom.
-6. Ako rola zahteva novu grupu, dodaj je u `bootstrap/template/inventory/hosts.ini.example`.
+5. Ako rola menja stanje sistema nepovratno, napiši upozorenje na vrhu `defaults/main.yml`.
+6. U `playbooks/playbook.yml` dodaj play sa namenskom grupom.
+7. Dodaj tu grupu, praznu, u `bootstrap/template/inventory/hosts.ini.example`.
+8. Dodaj `bootstrap/template/inventory/group_vars/<grupa>.yml` koji postavlja `role_<ime>_enabled: true`.
+
+Koraci 7 i 8 idu zajedno — grupa bez pripadajućeg `group_vars` fajla neće aktivirati rolu.
 
 Nijedna vrednost specifična za neko okruženje — imena domena, IP adrese, nazivi organizacija, kredencijali — ne sme se naći u `defaults/main.yml`. Koristi neutralne placeholder vrednosti (`example.com`, `10.0.0.0/8`, `CHANGEME`).
 
