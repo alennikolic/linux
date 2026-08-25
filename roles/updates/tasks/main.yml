@@ -1,0 +1,132 @@
+---
+# roles/updates/tasks/main.yml
+#
+# Azurira ceo sistem ili pojedinacne pakete.
+#
+# Rola ne restartuje sistem. Ako je restart potreban, prijavljuje to
+# kroz upozorenje na kraju.
+
+- name: "Azuriranje paketa"
+  block:
+
+    # -----------------------------------------------------------------
+    # Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je distribucija podrzana"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Rola "updates" trenutno podrzava iskljucivo Debian/Ubuntu, a
+          ovaj host je {{ ansible_os_family | default('nepoznat') }}.
+          Ukloni ga iz grupe [apply_updates] ili ga izuzmi kroz
+          host_vars/<host>.yml sa role_updates_enabled: false
+        success_msg: "Distribucija je podrzana."
+
+    # Zadato oboje znaci da korisnik ocekuje jedno, a dobija drugo.
+    - name: "Provera da obim azuriranja nije dvosmislen"
+      ansible.builtin.assert:
+        that:
+          - not (role_updates_all | bool and role_updates_packages | length > 0)
+        fail_msg: >-
+          Zadato je i role_updates_all: true i role_updates_packages.
+          Lista bi bila ignorisana. Izaberi jedno: ceo sistem ILI
+          pojedinacni paketi.
+        success_msg: "Obim azuriranja je jednoznacan."
+
+    - name: "Provera da je bar nesto zadato"
+      ansible.builtin.assert:
+        that:
+          - role_updates_all | bool or role_updates_packages | length > 0
+        fail_msg: >-
+          Host je u grupi [apply_updates], ali nije zadato sta se
+          azurira. Postavi role_updates_all: true za ceo sistem, ili
+          popuni role_updates_packages. Ako host ne treba azurirati,
+          ukloni ga iz grupe.
+        success_msg: "Obim azuriranja je zadat."
+
+    # -----------------------------------------------------------------
+    # Azuriranje
+    # -----------------------------------------------------------------
+
+    - name: "Osvezavanje liste paketa"
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: "{{ role_updates_cache_valid_time }}"
+      when: role_updates_update_cache | bool
+
+    - name: "Azuriranje celog sistema ({{ role_updates_upgrade_type }})"
+      ansible.builtin.apt:
+        upgrade: "{{ role_updates_upgrade_type }}"
+      when: role_updates_all | bool
+
+    - name: "Azuriranje pojedinacnih paketa"
+      ansible.builtin.apt:
+        name: "{{ role_updates_packages }}"
+        state: latest
+      when:
+        - not role_updates_all | bool
+        - role_updates_packages | length > 0
+
+    # -----------------------------------------------------------------
+    # Ciscenje
+    # -----------------------------------------------------------------
+
+    - name: "Uklanjanje preuzetih .deb fajlova"
+      ansible.builtin.apt:
+        autoclean: true
+      when: role_updates_autoclean | bool
+
+    - name: "Uklanjanje nekoriscenih zavisnosti"
+      ansible.builtin.apt:
+        autoremove: true
+      when: role_updates_autoremove | bool
+
+    # -----------------------------------------------------------------
+    # Provera restarta
+    # -----------------------------------------------------------------
+    # /var/run/reboot-required kreiraju sami paketi (kernel, glibc,
+    # libssl) kroz svoje postinst skripte. Rola ga samo cita.
+
+    - name: "Provera da li je restart potreban"
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: _reboot_required
+      changed_when: false
+      when: role_updates_check_reboot | bool
+
+    - name: "Spisak paketa koji zahtevaju restart"
+      ansible.builtin.slurp:
+        src: /var/run/reboot-required.pkgs
+      register: _reboot_pkgs
+      failed_when: false
+      when:
+        - role_updates_check_reboot | bool
+        - _reboot_required.stat.exists | default(false)
+
+    - name: "UPOZORENJE: restart je potreban"
+      ansible.builtin.debug:
+        msg: >-
+          Sistem zahteva restart da bi nadogradnja pocela da vazi.
+          Paketi: {{ (_reboot_pkgs.content | b64decode).split('\n')
+                     | reject('equalto', '') | list | join(', ')
+                     if _reboot_pkgs.content is defined else 'nepoznato' }}
+          Rola NE restartuje sistem — to je tvoja odluka.
+      when:
+        - role_updates_check_reboot | bool
+        - _reboot_required.stat.exists | default(false)
+        - not role_updates_fail_on_reboot | bool
+
+    - name: "Prekid rada jer je restart potreban"
+      ansible.builtin.fail:
+        msg: >-
+          Sistem zahteva restart, a role_updates_fail_on_reboot je
+          true. Restartuj host pa pokreni ponovo, ili postavi tu
+          opciju na false ako zelis samo upozorenje.
+      when:
+        - role_updates_check_reboot | bool
+        - _reboot_required.stat.exists | default(false)
+        - role_updates_fail_on_reboot | bool
+
+  when: role_updates_enabled | default(false) | bool
