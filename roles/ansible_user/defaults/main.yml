@@ -1,0 +1,105 @@
+---
+# roles/ansible_user/defaults/main.yml
+#
+# Rola "ansible_user" priprema svez server za upravljanje ostalim
+# rolama iz ovog repozitorijuma.
+#
+# VAZNO: ova rola se NE pokrece kroz playbook.yml. Pokrece se
+# jednokratno, kroz playbooks/bootstrap.yml, i to pod POSTOJECIM
+# nalogom na serveru (root, admin, cloud-init korisnik), jer nalog
+# koji rola tek treba da kreira u tom trenutku ne postoji.
+#
+#   ansible-playbook ../linux/playbooks/bootstrap.yml \
+#     --limit srv-web-01 --user root --ask-pass --ask-become-pass
+#
+# Rola NE dira /etc/ssh/sshd_config. Zabrana prijave lozinkom i root
+# prijave ostaje svesna, rucna odluka posle provere da kljuc radi.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_ansible_user_enabled: false
+
+
+# =====================================================================
+# NALOG
+# =====================================================================
+
+# Ime naloga pod kojim ce Ansible ubuduce raditi.
+role_ansible_user_name: ansible
+
+# Kucni folder. Prazna vrednost prepusta izbor sistemu.
+role_ansible_user_home: /home/ansible
+
+# Podrazumevani shell.
+role_ansible_user_shell: /bin/bash
+
+# Dodatne grupe. Prazna lista je uobicajena — pristup se dobija
+# preko sudo pravila ispod, ne kroz clanstvo u grupama.
+role_ansible_user_groups: []
+
+# Komentar u /etc/passwd.
+role_ansible_user_comment: "Ansible automation account"
+
+# Nalog nema lozinku — prijava iskljucivo kljucem.
+# Menjaj samo ako imas poseban razlog.
+role_ansible_user_password_lock: true
+
+
+# =====================================================================
+# SSH KLJUC
+# =====================================================================
+# OBAVEZNO. Rola prekida rad ako vrednost nije popunjena, da ne bi
+# kreirala nalog na koji se niko ne moze prijaviti.
+#
+# Vrednost je javni kljuc kontrolnog cvora, u celosti, u jednoj liniji:
+#
+#   group_vars/all.yml
+#     role_ansible_user_ssh_key: "ssh-ed25519 AAAAC3Nz... ansible@control"
+#
+# Kljuc procitas sa:
+#   cat ~/.ssh/id_ed25519.pub
+#
+role_ansible_user_ssh_key: ""
+
+# Dodatni kljucevi (rezervni kontrolni cvor, drugi administrator).
+# role_ansible_user_ssh_key_extra:
+#   - "ssh-ed25519 AAAAC3Nz... backup@control"
+role_ansible_user_ssh_key_extra: []
+
+# Kada je true, uklanja sve kljuceve koji nisu navedeni gore.
+# PAZNJA: rucno dodati kljucevi bice obrisani.
+role_ansible_user_ssh_key_exclusive: false
+
+
+# =====================================================================
+# SUDO
+# =====================================================================
+# Pravilo se upisuje u zaseban fajl u /etc/sudoers.d/, nikada u
+# /etc/sudoers direktno.
+
+role_ansible_user_sudo_enabled: true
+
+# Ime fajla u /etc/sudoers.d/.
+role_ansible_user_sudo_file: ansible
+
+# Sudo bez lozinke. Neophodno za neinteraktivno pokretanje.
+role_ansible_user_sudo_nopasswd: true
+
+# Dozvoljene komande. ALL znaci pun pristup.
+role_ansible_user_sudo_commands: ALL
+
+
+# =====================================================================
+# PYTHON
+# =====================================================================
+# Minimalni image-i cesto nemaju Python, bez kojeg Ansible ne moze
+# da radi. Task se izvrsava preko raw modula, koji Python ne zahteva.
+
+role_ansible_user_install_python: true
+
+# Ime paketa po distribuciji. Prilagodi ako koristis nesto drugo.
+role_ansible_user_python_package_debian: python3
+role_ansible_user_python_package_redhat: python3
