@@ -1,0 +1,22 @@
+---
+# bootstrap/template/inventory/group_vars/apply_updates.yml
+#
+# Aktivacija role "updates" za sve hostove u grupi [apply_updates].
+#
+# Rola azurira ceo sistem (role_updates_all: true) ili samo pakete
+# navedene u role_updates_packages.
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [apply_updates] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_updates_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+#
+# NAPOMENA: play koristi serial: 1 — hostovi se azuriraju jedan po
+# jedan, da azuriranje ne obori celu grupu istovremeno.
+
+role_updates_enabled: true
