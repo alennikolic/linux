@@ -1,0 +1,103 @@
+---
+# roles/packages/defaults/main.yml
+#
+# Rola "packages" instalira i uklanja pakete na Debian/Ubuntu
+# sistemima.
+#
+# Aktivacija ide preko clanstva hosta u grupi [deploy_packages], koja
+# kroz group_vars/deploy_packages.yml postavlja role_packages_enabled.
+#
+# VAZNO: rola trenutno podrzava iskljucivo Debian/Ubuntu. Nad
+# ostalim distribucijama prekida rad sa jasnom porukom.
+#
+# Redosled u playbook-u: repos → packages → updates. Instalacija iz
+# repozitorijuma koji jos nije dodat bi pala.
+#
+# Parametre menjaj u:
+#   group_vars/all.yml        — globalno
+#   host_vars/<host>.yml      — za pojedinacan host
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_packages_enabled: false
+
+
+# =====================================================================
+# PAKETI ZA INSTALACIJU
+# =====================================================================
+# Lista imena paketa. Prazna lista znaci da se nista ne instalira.
+#
+#   group_vars/all.yml
+#     role_packages_install:
+#       - htop
+#       - vim
+#       - curl
+#
+# Verzija se zadaje kroz ime paketa, znakom jednakosti:
+#
+#     role_packages_install:
+#       - "zabbix-agent=1:7.0.19-1+ubuntu24.04"
+#
+# Dostupne verzije vidis sa:
+#   apt-cache madison zabbix-agent
+#
+# NAPOMENA: zakovana verzija sprecava nadogradnju kroz rolu "updates".
+# Koristi samo kada ti je to zaista namera.
+#
+role_packages_install: []
+
+
+# =====================================================================
+# PAKETI ZA UKLANJANJE
+# =====================================================================
+# Lista imena paketa koje treba ukloniti.
+#
+#   group_vars/all.yml
+#     role_packages_remove:
+#       - telnet
+#       - rsh-client
+#
+# Uklanjanje NE povlaci autoremove — nekoriscene zavisnosti ostaju.
+# To je namerno: autoremove ume da ukloni vise nego sto ocekujes.
+# Ako ti treba, pokreni ga rucno i svesno.
+#
+role_packages_remove: []
+
+
+# =====================================================================
+# STANJE INSTALIRANIH PAKETA
+# =====================================================================
+# present — instaliraj ako nedostaje, ne diraj ako postoji (podrazumevano)
+# latest  — nadogradi na najnoviju dostupnu verziju
+#
+# PAZNJA: "latest" znaci da rola menja verzije paketa pri svakom
+# pokretanju. Nadogradnja je posao role "updates", koja se izvrsava
+# sa serial: 1 upravo da ne obori celu grupu istovremeno. Ovde
+# ostavi "present" osim ako tacno znas zasto ne bi.
+#
+role_packages_state: present
+
+
+# =====================================================================
+# APT KES
+# =====================================================================
+# Osvezavanje liste paketa pre instalacije.
+#
+# cache_valid_time je u sekundama. Ako je kes noviji od te vrednosti,
+# apt-get update se preskace — znacajna usteda na vecoj floti.
+#
+role_packages_update_cache: true
+role_packages_cache_valid_time: 3600
+
+
+# =====================================================================
+# UKLANJANJE KONFIGURACIONIH FAJLOVA
+# =====================================================================
+# Kada je true, uklanjanje paketa brise i njegovu konfiguraciju.
+#
+# PAZNJA: nepovratno. Podrazumevano iskljuceno.
+#
+role_packages_purge: false
