@@ -1,0 +1,109 @@
+---
+# roles/banner/defaults/main.yml
+#
+# Rola "banner" upravlja porukama koje korisnik vidi pri prijavi na
+# sistem.
+#
+# Aktivacija ide preko clanstva hosta u grupi [apply_banner], koja
+# kroz group_vars/apply_banner.yml postavlja role_banner_enabled.
+# Vrednost ispod je samo podrazumevana.
+#
+# Parametre menjaj u:
+#   group_vars/all.yml        — globalno
+#   host_vars/<host>.yml      — za pojedinacan host
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+# Kada je false, rola ne dira nijedan fajl.
+#
+role_banner_enabled: false
+
+
+# =====================================================================
+# /etc/motd — poruka POSLE prijave
+# =====================================================================
+# Prikazuje se nakon uspesne autentikacije.
+
+# Prilagodjen sadrzaj. Ako nije definisan, koristi se
+# role_banner_default_text ispod.
+#
+# Podrzani su Jinja2 izrazi. Primer:
+#
+#   host_vars/srv-web-01.yml
+#     role_banner_text: |
+#       Host: {{ inventory_hostname }}
+#       Kontakt: sysadmin@example.com
+#
+# NAPOMENA: ako koristis okvir od zvezdica, izbegavaj promenljive
+# unutar okvira — {{ inventory_hostname }} se siri na razlicitu
+# duzinu, pa desna ivica okvira nece biti poravnata.
+#
+# role_banner_text: ""
+
+
+# Podrazumevani sadrzaj /etc/motd.
+#
+role_banner_default_text: |
+  *****************************************************************
+  *                                                               *
+  *  UPOZORENJE                                                   *
+  *                                                               *
+  *  Pristup ovom sistemu dozvoljen je samo ovlascenim licima.    *
+  *  Sve aktivnosti se beleze i mogu biti predmet provere.        *
+  *                                                               *
+  *  Neovlasceni pristup je zabranjen.                            *
+  *                                                               *
+  *****************************************************************
+
+
+# =====================================================================
+# /etc/issue — poruka PRE prijave (lokalna konzola)
+# =====================================================================
+# Prikazuje se na login promptu, pre unosa lozinke.
+# Podrazumevano iskljuceno.
+
+role_banner_issue_enabled: false
+
+# Ako nije definisan, koristi se isti tekst kao za /etc/motd.
+#
+# role_banner_issue_text: ""
+
+
+# =====================================================================
+# /etc/issue.net — poruka PRE prijave (mrezna, SSH)
+# =====================================================================
+# Prikazuje se pri SSH prijavi, pre unosa lozinke.
+# Podrazumevano iskljuceno.
+#
+# VAZNO: da bi SSH zaista prikazao ovaj fajl, u /etc/ssh/sshd_config
+# mora stajati:
+#
+#   Banner /etc/issue.net
+#
+# Ova rola NE menja sshd_config. Ako je opcija iskljucena, fajl ce
+# biti upisan ali ga niko nece videti.
+
+role_banner_issue_net_enabled: false
+
+# Ako nije definisan, koristi se isti tekst kao za /etc/motd.
+#
+# role_banner_issue_net_text: ""
+
+
+# =====================================================================
+# OSTALO
+# =====================================================================
+
+# Cuvanje kopije prethodnog sadrzaja pre prepisivanja.
+# Kopije ostaju u istom folderu, sa vremenskom oznakom u imenu.
+#
+role_banner_backup: false
+
+# Vlasnik i dozvole nad upisanim fajlovima.
+# Menjaj samo ako imas poseban razlog.
+#
+role_banner_owner: root
+role_banner_group: root
+role_banner_mode: '0644'
