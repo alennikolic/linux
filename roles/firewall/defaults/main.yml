@@ -1,0 +1,151 @@
+---
+# roles/firewall/defaults/main.yml
+#
+# Rola "firewall" upravlja UFW pravilima na Debian/Ubuntu sistemima.
+#
+# Aktivacija ide preko clanstva hosta u grupi [apply_firewall], koja
+# kroz group_vars/apply_firewall.yml postavlja role_firewall_enabled.
+#
+# =====================================================================
+# UPOZORENJE
+# =====================================================================
+# Pogresna pravila mogu prekinuti SSH pristup serveru. Rola ima
+# ugradjenu zastitu — SSH je UVEK dozvoljen i to se ne moze iskljuciti
+# nijednom varijablom — ali to ne pokriva svaki scenario.
+#
+# Pre primene na produkciju OBAVEZNO:
+#   ./apply.sh --check --diff --limit <host>
+#
+# I zadrzi otvorenu drugu SSH sesiju dok testiras.
+# =====================================================================
+#
+# Rola je ADITIVNA: dodaje pravila iz liste, ali ne uklanja ona koja
+# si ranije dodao pa obrisao iz liste. Za uklanjanje koristi
+# "delete: true" na samom pravilu.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_firewall_enabled: false
+
+
+# =====================================================================
+# SSH — ZASTITA OD ZAKLJUCAVANJA
+# =====================================================================
+# Ovo pravilo se upisuje UVEK, pre svih ostalih i pre postavljanja
+# podrazumevane zabrane. Ne postoji varijabla koja ga iskljucuje.
+#
+# Port se podrazumevano preuzima iz same Ansible konekcije, pa radi
+# i kada koristis nestandardan port kroz ansible_port u hosts.ini.
+#
+role_firewall_ssh_port: "{{ ansible_port | default(22) }}"
+
+# allow — obicna dozvola (podrazumevano)
+# limit — dozvola uz ogranicenje broja pokusaja (6 u 30 sekundi)
+#
+# "limit" je korisna zastita od brute-force napada, ali moze blokirati
+# i legitimne alate koji otvaraju vise konekcija odjednom.
+#
+role_firewall_ssh_rule: allow
+
+# Ogranicenje izvorne adrese. "any" dozvoljava sa svih adresa.
+#
+# PAZNJA: ako ovde upises adresu, a zatim pristupas sa druge, ostajes
+# zakljucan izvan servera. Koristi tek kada si siguran u sve putanje
+# pristupa — ukljucujuci VPN, bastion i kontrolni cvor.
+#
+#   role_firewall_ssh_from: "10.0.0.0/8"
+#
+role_firewall_ssh_from: any
+
+
+# =====================================================================
+# PODRAZUMEVANE POLITIKE
+# =====================================================================
+# incoming — sve sto nije izricito dozvoljeno
+# outgoing — saobracaj koji server sam pokrece
+# routed   — prosledjivanje kroz server (relevantno samo za rutere)
+#
+# Vrednosti: allow, deny, reject
+#
+# "deny" tiho odbacuje paket; "reject" salje odgovor. Za dolazni
+# saobracaj je "deny" uobicajen — napadac ne dobija potvrdu da host
+# postoji.
+#
+role_firewall_default_incoming: deny
+role_firewall_default_outgoing: allow
+role_firewall_default_routed: deny
+
+
+# =====================================================================
+# PRAVILA
+# =====================================================================
+# Lista recnika. Svako pravilo ima najmanje "port" ili "name".
+#
+# Polja:
+#   rule       — allow (podrazumevano), deny, reject, limit
+#   port       — broj porta ili opseg (npr. 10050, "8000:8010")
+#   proto      — tcp (podrazumevano), udp, any
+#   from       — izvorna adresa ili mreza, podrazumevano any
+#   to         — odredisna adresa na ovom hostu, podrazumevano any
+#   direction  — in (podrazumevano) ili out
+#   name       — UFW aplikacioni profil umesto porta (npr. "Nginx Full")
+#   comment    — opis koji ostaje vidljiv u "ufw status"
+#   delete     — true uklanja pravilo umesto da ga doda
+#
+# ---------------------------------------------------------------------
+# Primer: Zabbix agent dostupan samo serveru
+# ---------------------------------------------------------------------
+#   group_vars/all.yml
+#     role_firewall_rules:
+#       - rule: allow
+#         port: 10050
+#         proto: tcp
+#         from: "10.0.0.50"
+#         comment: "Zabbix server -> agent"
+#
+# ---------------------------------------------------------------------
+# Primer: web server otvoren za sve
+# ---------------------------------------------------------------------
+#     role_firewall_rules:
+#       - { rule: allow, port: 80,  proto: tcp, comment: "HTTP" }
+#       - { rule: allow, port: 443, proto: tcp, comment: "HTTPS" }
+#
+role_firewall_rules: []
+
+
+# =====================================================================
+# LOGOVANJE
+# =====================================================================
+# off, low, medium, high, full
+#
+# "low" belezi blokirane pakete i eksplicitno logovana pravila.
+# "medium" i vise brzo pune /var/log/ufw.log na prometnom serveru.
+#
+role_firewall_logging: low
+
+
+# =====================================================================
+# STANJE
+# =====================================================================
+# enabled  — UFW aktivan (podrazumevano)
+# disabled — UFW ugasen, pravila ostaju upisana
+#
+role_firewall_state: enabled
+
+
+# =====================================================================
+# RESET
+# =====================================================================
+# Kada je true, rola BRISE sva postojeca UFW pravila pre nego sto
+# upise nova.
+#
+# PAZNJA: ovo je destruktivno i nepovratno. Sva rucno dodata pravila
+# nestaju. Koristi samo kada namerno gradis konfiguraciju od nule.
+#
+# Redosled je i dalje bezbedan — SSH pravilo se upisuje odmah posle
+# reseta, pre nego sto podrazumevana zabrana pocne da vazi.
+#
+role_firewall_reset: false
