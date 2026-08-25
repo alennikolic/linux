@@ -1,0 +1,59 @@
+# .gitignore
+#
+# Zastita javnog repozitorijuma.
+#
+# Ovde ide SAMO kod: role, playbook i bootstrap sablon.
+# Inventory, varijable i tajne pripadaju radnom folderu izvan git-a.
+#
+# NAPOMENA: bootstrap/template/inventory/ je namerno IZUZET iz pravila
+# ispod — to je prazan sablon bez stvarnih podataka i mora ostati u
+# repozitorijumu.
+
+# --- Inventory (osim sablona) ----------------------------------------
+inventory/
+group_vars/
+host_vars/
+
+!bootstrap/template/inventory/
+!bootstrap/template/inventory/**
+
+# --- Tajne -----------------------------------------------------------
+vault-pass*
+.vault-pass*
+*vault_pass*
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.jks
+id_rsa*
+id_ed25519*
+*.kdbx
+secrets.yml
+secrets.yaml
+*secret*
+*.env
+.env*
+
+# --- Ansible radni fajlovi -------------------------------------------
+ansible.cfg
+*.retry
+.facts/
+fact_cache/
+*.log
+ansible.log
+
+# --- Editor i sistem -------------------------------------------------
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# --- Python ----------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
