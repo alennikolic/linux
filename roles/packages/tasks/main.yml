@@ -1,0 +1,51 @@
+---
+# roles/packages/tasks/main.yml
+#
+# Instalira pakete iz role_packages_install i uklanja one iz
+# role_packages_remove.
+#
+# Oba taska prosledjuju celu listu jednom pozivu apt modula, umesto
+# petlje po paketu. Apt tako resava zavisnosti odjednom i radi
+# osetno brze.
+
+- name: "Upravljanje paketima"
+  block:
+
+    - name: "Provera da je distribucija podrzana"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Rola "packages" trenutno podrzava iskljucivo Debian/Ubuntu, a
+          ovaj host je {{ ansible_os_family | default('nepoznat') }}.
+          Ukloni ga iz grupe [deploy_packages] ili ga izuzmi kroz
+          host_vars/<host>.yml sa role_packages_enabled: false
+        success_msg: "Distribucija je podrzana."
+
+    - name: "Provera da isti paket nije u obe liste"
+      ansible.builtin.assert:
+        that:
+          - role_packages_install | map('regex_replace', '=.*$', '') | list
+            | select('in', role_packages_remove) | list | length == 0
+        fail_msg: >-
+          Isti paket se nalazi i u role_packages_install i u
+          role_packages_remove. Rezultat bi zavisio od redosleda
+          taskova, sto nije pouzdano. Ukloni ga iz jedne liste.
+        success_msg: "Liste se ne preklapaju."
+
+    - name: "Instalacija paketa"
+      ansible.builtin.apt:
+        name: "{{ role_packages_install }}"
+        state: "{{ role_packages_state }}"
+        update_cache: "{{ role_packages_update_cache | bool }}"
+        cache_valid_time: "{{ role_packages_cache_valid_time }}"
+      when: role_packages_install | length > 0
+
+    - name: "Uklanjanje paketa"
+      ansible.builtin.apt:
+        name: "{{ role_packages_remove }}"
+        state: absent
+        purge: "{{ role_packages_purge | bool }}"
+      when: role_packages_remove | length > 0
+
+  when: role_packages_enabled | default(false) | bool
