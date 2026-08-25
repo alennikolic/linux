@@ -1,0 +1,121 @@
+---
+# roles/ansible_user/tasks/main.yml
+#
+# Priprema servera za upravljanje ostalim rolama:
+#   1. Provera da je SSH kljuc zadat
+#   2. Instalacija Pythona ako nedostaje
+#   3. Kreiranje naloga
+#   4. Postavljanje SSH kljuca
+#   5. Sudo pravilo
+
+- name: "Priprema Ansible naloga"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provera
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je SSH kljuc zadat"
+      ansible.builtin.assert:
+        that:
+          - role_ansible_user_ssh_key is defined
+          - role_ansible_user_ssh_key | length > 0
+          - role_ansible_user_ssh_key is search('^(ssh-|ecdsa-)')
+        fail_msg: >-
+          role_ansible_user_ssh_key nije popunjen ili nije ispravan javni
+          kljuc. Upisi ga u group_vars/all.yml pre pokretanja. Bez toga
+          bi nalog bio kreiran bez ijednog kljuca i niko se ne bi mogao
+          prijaviti. Kljuc procitas sa: cat ~/.ssh/id_ed25519.pub
+        success_msg: "SSH kljuc je zadat."
+
+    # -----------------------------------------------------------------
+    # 2. Python
+    # -----------------------------------------------------------------
+    # raw modul ne zahteva Python na ciljnom sistemu, pa moze da ga
+    # instalira. Ostali moduli bi bez njega pali.
+
+    - name: "Provera da li Python postoji"
+      ansible.builtin.raw: command -v python3 || command -v python
+      register: _python_check
+      changed_when: false
+      failed_when: false
+      when: role_ansible_user_install_python | bool
+
+    - name: "Instalacija Pythona (Debian/Ubuntu)"
+      ansible.builtin.raw: apt-get update && apt-get install -y {{ role_ansible_user_python_package_debian }}
+      when:
+        - role_ansible_user_install_python | bool
+        - _python_check.rc != 0
+        - ansible_os_family | default('') == 'Debian'
+      changed_when: true
+
+    - name: "Instalacija Pythona (RHEL/Rocky/Alma)"
+      ansible.builtin.raw: (dnf install -y {{ role_ansible_user_python_package_redhat }} || yum install -y {{ role_ansible_user_python_package_redhat }})
+      when:
+        - role_ansible_user_install_python | bool
+        - _python_check.rc != 0
+        - ansible_os_family | default('') == 'RedHat'
+      changed_when: true
+
+    - name: "Prikupljanje podataka o sistemu"
+      ansible.builtin.setup:
+      when:
+        - role_ansible_user_install_python | bool
+        - _python_check.rc != 0
+
+    # -----------------------------------------------------------------
+    # 3. Nalog
+    # -----------------------------------------------------------------
+
+    - name: "Kreiranje naloga {{ role_ansible_user_name }}"
+      ansible.builtin.user:
+        name: "{{ role_ansible_user_name }}"
+        comment: "{{ role_ansible_user_comment }}"
+        home: "{{ role_ansible_user_home | default(omit, true) }}"
+        shell: "{{ role_ansible_user_shell }}"
+        groups: "{{ role_ansible_user_groups | join(',') | default(omit, true) }}"
+        append: true
+        create_home: true
+        password: "{{ '!' if role_ansible_user_password_lock | bool else omit }}"
+        state: present
+
+    # -----------------------------------------------------------------
+    # 4. SSH kljuc
+    # -----------------------------------------------------------------
+
+    - name: "Postavljanje SSH kljuca"
+      ansible.posix.authorized_key:
+        user: "{{ role_ansible_user_name }}"
+        key: "{{ ([role_ansible_user_ssh_key] + role_ansible_user_ssh_key_extra) | join('\n') }}"
+        exclusive: "{{ role_ansible_user_ssh_key_exclusive | bool }}"
+        state: present
+
+    # -----------------------------------------------------------------
+    # 5. Sudo
+    # -----------------------------------------------------------------
+
+    - name: "Provera da /etc/sudoers.d postoji"
+      ansible.builtin.file:
+        path: /etc/sudoers.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+      when: role_ansible_user_sudo_enabled | bool
+
+    # validate garantuje da neispravno pravilo nikada ne stigne na
+    # disk — visudo proverava sintaksu pre upisa.
+    - name: "Sudo pravilo za {{ role_ansible_user_name }}"
+      ansible.builtin.copy:
+        content: |
+          # Upravlja Ansible rola: ansible_user
+          # Rucne izmene bice prepisane.
+          {{ role_ansible_user_name }} ALL=(ALL) {{ 'NOPASSWD:' if role_ansible_user_sudo_nopasswd | bool else '' }}{{ role_ansible_user_sudo_commands }}
+        dest: "/etc/sudoers.d/{{ role_ansible_user_sudo_file }}"
+        owner: root
+        group: root
+        mode: '0440'
+        validate: 'visudo -cf %s'
+      when: role_ansible_user_sudo_enabled | bool
+
+  when: role_ansible_user_enabled | default(false) | bool
