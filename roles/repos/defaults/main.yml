@@ -1,0 +1,68 @@
+---
+# roles/repos/defaults/main.yml
+#
+# Rola "repos" upravlja APT repozitorijumima na Debian/Ubuntu
+# sistemima.
+#
+# Aktivacija ide preko clanstva hosta u grupi [apply_repos], koja
+# kroz group_vars/apply_repos.yml postavlja role_repos_enabled.
+#
+# VAZNO: rola trenutno podrzava iskljucivo Debian/Ubuntu. Nad
+# ostalim distribucijama prekida rad sa jasnom porukom.
+#
+# Rola NE instalira pakete — samo dodaje izvore. Instalacija je
+# posao role "packages", koja se u playbook-u izvrsava kasnije.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_repos_enabled: false
+
+
+# =====================================================================
+# SPISAK REPOZITORIJUMA
+# =====================================================================
+# Lista rečnika. Obavezna polja su "name" i "uris".
+#
+# Polja:
+#   name          — ime fajla u /etc/apt/sources.list.d/ (bez ekstenzije)
+#   uris          — bazni URL repozitorijuma
+#   suites        — podrazumevano kodno ime distribucije (noble, jammy...)
+#   components    — podrazumevano [main]
+#   signed_by     — URL GPG kljuca, ili apsolutna putanja do keyring fajla
+#   architectures — opciono, npr. amd64
+#   enabled       — podrazumevano true
+#   state         — present (podrazumevano) ili absent
+#
+# ---------------------------------------------------------------------
+# Primer: Zabbix 7.0 LTS
+# ---------------------------------------------------------------------
+#   group_vars/all.yml
+#     role_repos_list:
+#       - name: zabbix
+#         uris: "https://repo.zabbix.com/zabbix/7.0/ubuntu"
+#         suites: "{{ ansible_distribution_release }}"
+#         components: [main]
+#         signed_by: "https://repo.zabbix.com/zabbix-official-repo.key"
+#
+# PAZNJA na putanju: Zabbix je menjao strukturu URL-a.
+#   7.0 LTS  →  /zabbix/7.0/ubuntu
+#   7.2      →  /zabbix/7.2/release/ubuntu
+#   7.4      →  /zabbix/7.4/release/ubuntu
+#
+# Od 7.2 postoje dva odvojena repozitorijuma:
+#   .../release/ubuntu  — zakovana tacka izdanja
+#   .../stable/ubuntu   — prati minor izdanja unutar iste verzije
+#
+role_repos_list: []
+
+
+# =====================================================================
+# OSVEZAVANJE KESA
+# =====================================================================
+# Posle izmene izvora APT kes se osvezava kroz handler. Iskljuci samo
+# ako to radis na drugom mestu.
+
+role_repos_update_cache: true
