@@ -1,0 +1,131 @@
+---
+# roles/firewall/tasks/main.yml
+#
+# Redosled taskova je BEZBEDNOSNO bitan:
+#
+#   1. Instalacija UFW-a
+#   2. (opciono) Reset
+#   3. SSH pravilo          <- pre svega ostalog
+#   4. Ostala pravila
+#   5. Podrazumevane politike
+#   6. Aktiviranje
+#
+# SSH pravilo ide pre podrazumevane zabrane. Obrnut redosled bi na
+# trenutak ostavio server bez dozvole za SSH, sto na aktivnom UFW-u
+# znaci prekid postojece sesije.
+
+- name: "Upravljanje zastitnim zidom (UFW)"
+  block:
+
+    # -----------------------------------------------------------------
+    # Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je distribucija podrzana"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Rola "firewall" koristi UFW i podrzava iskljucivo
+          Debian/Ubuntu, a ovaj host je
+          {{ ansible_os_family | default('nepoznat') }}.
+          Ukloni ga iz grupe [apply_firewall] ili ga izuzmi kroz
+          host_vars/<host>.yml sa role_firewall_enabled: false
+        success_msg: "Distribucija je podrzana."
+
+    - name: "Provera da svako pravilo ima port ili name"
+      ansible.builtin.assert:
+        that:
+          - item.port is defined or item.name is defined
+        fail_msg: >-
+          Pravilo u role_firewall_rules mora imati "port" ili "name"
+          (UFW aplikacioni profil). Problematican unos: {{ item }}
+      loop: "{{ role_firewall_rules }}"
+      loop_control:
+        label: "{{ item.comment | default(item.port | default(item.name)) }}"
+
+    # -----------------------------------------------------------------
+    # 1. Instalacija
+    # -----------------------------------------------------------------
+
+    - name: "Instalacija UFW-a"
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # -----------------------------------------------------------------
+    # 2. Reset (opciono, destruktivno)
+    # -----------------------------------------------------------------
+
+    - name: "Brisanje svih postojecih pravila"
+      community.general.ufw:
+        state: reset
+      when: role_firewall_reset | bool
+
+    # -----------------------------------------------------------------
+    # 3. SSH — uvek, pre svega ostalog
+    # -----------------------------------------------------------------
+    # Ovaj task nema "when". To je namerno: ne postoji konfiguracija
+    # koja ostavlja server bez dozvole za SSH.
+
+    - name: "SSH pristup na portu {{ role_firewall_ssh_port }}"
+      community.general.ufw:
+        rule: "{{ role_firewall_ssh_rule }}"
+        port: "{{ role_firewall_ssh_port }}"
+        proto: tcp
+        from_ip: "{{ role_firewall_ssh_from }}"
+        comment: "SSH — upravlja Ansible rola firewall, ne uklanjati"
+
+    # -----------------------------------------------------------------
+    # 4. Ostala pravila
+    # -----------------------------------------------------------------
+
+    - name: "Upis pravila"
+      community.general.ufw:
+        rule: "{{ item.rule | default('allow') }}"
+        port: "{{ item.port | default(omit) }}"
+        proto: "{{ item.proto | default('tcp') }}"
+        from_ip: "{{ item.from | default('any') }}"
+        to_ip: "{{ item.to | default('any') }}"
+        direction: "{{ item.direction | default('in') }}"
+        name: "{{ item.name | default(omit) }}"
+        comment: "{{ item.comment | default(omit) }}"
+        delete: "{{ item.delete | default(false) }}"
+      loop: "{{ role_firewall_rules }}"
+      loop_control:
+        label: "{{ item.comment | default(item.port | default(item.name)) }}"
+
+    # -----------------------------------------------------------------
+    # 5. Podrazumevane politike
+    # -----------------------------------------------------------------
+
+    - name: "Podrazumevana politika za dolazni saobracaj"
+      community.general.ufw:
+        default: "{{ role_firewall_default_incoming }}"
+        direction: incoming
+
+    - name: "Podrazumevana politika za odlazni saobracaj"
+      community.general.ufw:
+        default: "{{ role_firewall_default_outgoing }}"
+        direction: outgoing
+
+    - name: "Podrazumevana politika za prosledjivanje"
+      community.general.ufw:
+        default: "{{ role_firewall_default_routed }}"
+        direction: routed
+
+    # -----------------------------------------------------------------
+    # 6. Logovanje i aktiviranje
+    # -----------------------------------------------------------------
+
+    - name: "Nivo logovanja"
+      community.general.ufw:
+        logging: "{{ role_firewall_logging }}"
+
+    - name: "Stanje zastitnog zida"
+      community.general.ufw:
+        state: "{{ role_firewall_state }}"
+
+  when: role_firewall_enabled | default(false) | bool
