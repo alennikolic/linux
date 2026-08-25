@@ -74,6 +74,15 @@ ansible-inventory --graph
 ansible-inventory --host srv-web-01
 ```
 
+### Prefiks grupe
+
+| Prefiks | Značenje | Primer |
+|---|---|---|
+| `apply_` | menja stanje onoga što već postoji | `apply_firewall`, `apply_updates` |
+| `deploy_` | donosi nešto novo na sistem | `deploy_packages`, `deploy_root_ca` |
+
+Pravilo je konvencija, ne tehnička razlika — Ansible-u je svejedno. Postoji da bi iz imena grupe bilo jasno da li rola konfiguriše ili instalira.
+
 ### Izuzetak po hostu
 
 Pošto `host_vars` ima viši prioritet od `group_vars`, host može ostati u grupi a da rola nad njim bude privremeno isključena:
@@ -97,7 +106,7 @@ srv-web-02
 [dbservers]
 srv-db-01
 
-[deploy_tools:children]
+[deploy_packages:children]
 webservers
 dbservers
 ```
@@ -107,8 +116,8 @@ dbservers
 Privremeno izuzimanje ne zahteva izmenu inventory-ja:
 
 ```bash
-./apply.sh --limit '!apply_system_update'    # preskoči jednu grupu
-./apply.sh --limit apply_banner              # pokreni samo jednu
+./apply.sh --limit '!apply_updates'     # preskoči jednu grupu
+./apply.sh --limit apply_banner         # pokreni samo jednu
 ```
 
 ---
@@ -290,11 +299,11 @@ Da bi rola bila u skladu sa ostatkom projekta:
 3. Sve ostale varijable prefiksiraj sa `role_<ime>_` i dokumentuj ih na istom mestu.
 4. U `tasks/main.yml` omotaj taskove u `block:` sa `when: role_<ime>_enabled | default(false) | bool`.
 5. Ako rola menja stanje sistema nepovratno, napiši upozorenje na vrhu `defaults/main.yml`.
-6. U `playbooks/playbook.yml` dodaj play sa namenskom grupom.
+6. U `playbooks/playbook.yml` dodaj play sa namenskom grupom, uz prefiks `apply_` ili `deploy_` prema tabeli iznad.
 7. Dodaj tu grupu, praznu, u `bootstrap/template/inventory/hosts.ini.example`.
 8. Dodaj `bootstrap/template/inventory/group_vars/<grupa>.yml` koji postavlja `role_<ime>_enabled: true`.
 
-Koraci 7 i 8 idu zajedno — grupa bez pripadajućeg `group_vars` fajla neće aktivirati rolu.
+Koraci 7 i 8 idu zajedno — grupa bez pripadajućeg `group_vars` fajla neće aktivirati rolu, a Ansible to neće prijaviti kao grešku.
 
 Nijedna vrednost specifična za neko okruženje — imena domena, IP adrese, nazivi organizacija, kredencijali — ne sme se naći u `defaults/main.yml`. Koristi neutralne placeholder vrednosti (`example.com`, `10.0.0.0/8`, `CHANGEME`).
 
