@@ -2,7 +2,7 @@
 
 Kolekcija Ansible rola za centralizovano upravljanje Linux serverima.
 
-Repozitorijum sadrži **isključivo kod** — role, glavni playbook i inicijalni scaffold. Inventory, varijable i tajne ostaju izvan repozitorijuma, na Ansible kontrolnom čvoru.
+Repozitorijum sadrži **isključivo kod** — role, playbook-ove i inicijalni scaffold. Inventory, varijable i tajne ostaju izvan repozitorijuma, na Ansible kontrolnom čvoru.
 
 ---
 
@@ -11,12 +11,14 @@ Repozitorijum sadrži **isključivo kod** — role, glavni playbook i inicijalni
 ```text
 linux/
 ├── roles/
-│   └── <ime_role>/
+│   ├── ansible_user/             # priprema sveze instaliranog servera
+│   └── banner/                   # /etc/motd i srodni fajlovi
+│       ├── README.md
 │       ├── defaults/main.yml     # dokumentovane default varijable
-│       ├── tasks/main.yml
-│       └── handlers/main.yml
+│       └── tasks/main.yml
 ├── playbooks/
-│   └── playbook.yml              # glavni playbook, poziva sve role
+│   ├── playbook.yml              # svakodnevni rad, sve role
+│   └── bootstrap.yml             # jednokratna priprema novog servera
 ├── bootstrap/
 │   ├── init.sh                   # inicijalizacija radnog foldera
 │   └── template/                 # šablon konfiguracije
@@ -29,7 +31,7 @@ linux/
 | Nije u repozitorijumu | Gde se nalazi |
 |---|---|
 | `inventory/` sa stvarnim hostovima | privatni folder na kontrolnom čvoru |
-| Popunjeni `host_vars/`, `group_vars/all.yml` | isto |
+| Popunjen `group_vars/all.yml`, `host_vars/` | isto |
 | Aktivan `ansible.cfg` | isto (kreira ga `init.sh`) |
 | Vault lozinke, sertifikati, ključevi | isto, nikada u git |
 
@@ -83,6 +85,8 @@ ansible-inventory --host srv-web-01
 
 Pravilo je konvencija, ne tehnička razlika — Ansible-u je svejedno. Postoji da bi iz imena grupe bilo jasno da li rola konfiguriše ili instalira.
 
+Grupa `[bootstrap]` je jedini izuzetak i nema prefiks, jer ne pripada svakodnevnom toku — vidi [Priprema novog servera](#priprema-novog-servera).
+
 ### Izuzetak po hostu
 
 Pošto `host_vars` ima viši prioritet od `group_vars`, host može ostati u grupi a da rola nad njim bude privremeno isključena:
@@ -125,8 +129,19 @@ Privremeno izuzimanje ne zahteva izmenu inventory-ja:
 ## Preduslovi
 
 - Ansible 2.14 ili noviji na kontrolnom čvoru
+- Kolekcija `ansible.posix` — uključena je u pun `ansible` paket, ali **ne** i u `ansible-core`:
+
+```bash
+  ansible-galaxy collection install ansible.posix
+```
+
 - SSH pristup do ciljnih sistema
 - `sudo` privilegije na ciljnim sistemima
+- SSH ključni par na kontrolnom čvoru; ako ne postoji:
+
+```bash
+  ssh-keygen -t ed25519 -C "ansible@control"
+```
 
 ---
 
@@ -172,22 +187,104 @@ Skripta kopira šablon iz `bootstrap/template/`, upiše putanje ka repozitorijum
 
 Skripta namerno **ne** pokreće `git init` u ciljnom folderu. Ako želiš da versioniraš svoju konfiguraciju, uradi to svesno i isključivo ka privatnom remote-u.
 
-### 3. Popuni konfiguraciju
+### 3. Upiši SSH ključ kontrolnog čvora
 
 ```bash
 cd /opt/ansible/production
+cat ~/.ssh/id_ed25519.pub
+```
+
+Dobijenu vrednost upiši u `inventory/group_vars/all.yml`:
+
+```yaml
+role_ansible_user_ssh_key: "ssh-ed25519 AAAAC3Nz... ansible@control"
+```
+
+Bez ovoga priprema novog servera prekida rad na prvom tasku.
+
+> `all.yml` je jedini fajl u `group_vars/` koji se popunjava. Ostali su aktivacioni — postavljaju `role_*_enabled` prekidače za svoje grupe i ne diraju se.
+
+### 4. Popuni inventory
+
+```bash
 mv inventory/hosts.ini.example inventory/hosts.ini
 ```
 
 Uredi `hosts.ini` prema svom okruženju — sadrži spisak svih dostupnih grupa, praznih. Upisuješ samo hostove koje želiš.
 
-Fajlove u `group_vars/` ne treba dirati; oni već postavljaju odgovarajuće `role_*_enabled` prekidače.
+---
 
-### 4. Provera
+## Priprema novog servera
+
+Sveže instaliran server još nema nalog pod kojim se Ansible povezuje. Zato prvo prolazi kroz `playbooks/bootstrap.yml`, koji se povezuje **postojećim** nalogom (`root`, `admin`, cloud-init korisnik) i tek kreira `ansible` nalog.
+
+Ovaj playbook se **ne** pokreće kroz `apply.sh`.
+
+**1.** Dodaj host u grupu `[bootstrap]`:
+
+```ini
+[bootstrap]
+srv-web-01
+```
+
+**2.** Pokreni pripremu:
 
 ```bash
-./apply.sh --check --diff --limit <host>
+cd /opt/ansible/production
+
+ansible-playbook ../linux/playbooks/bootstrap.yml \
+  --limit srv-web-01 \
+  --user root --ask-pass --ask-become-pass
 ```
+
+Zastavice zavise od načina pristupa:
+
+| Situacija | Zastavice |
+|---|---|
+| root sa lozinkom | `--user root --ask-pass` |
+| sudo korisnik sa lozinkom | `--user admin --ask-pass --ask-become-pass` |
+| cloud-init sa ključem | `--user ubuntu` |
+
+**3.** Proveri da ključ i sudo rade:
+
+```bash
+ssh ansible@srv-web-01 sudo whoami
+```
+
+Očekivani izlaz je `root`, bez pitanja za lozinku.
+
+**4.** Ukloni host iz `[bootstrap]` i upiši ga u grupe rola koje treba da dobije.
+
+Tek od tog trenutka host se koristi kroz `./apply.sh`.
+
+Detalji su u [`roles/ansible_user/README.md`](roles/ansible_user/README.md).
+
+---
+
+## Pokretanje
+
+Uvek iz `production/` foldera, kako bi Ansible pročitao lokalni `ansible.cfg`:
+
+```bash
+cd /opt/ansible/production
+
+# Provera bez izmena — uvek prvo ovo
+./apply.sh --check --diff --limit srv-web-01
+
+# Sve role nad svim hostovima
+./apply.sh
+
+# Ograničenje na pojedinačan host
+./apply.sh --limit srv-web-01
+
+# Ograničenje na jednu grupu
+./apply.sh --limit apply_banner
+
+# Detaljan ispis
+./apply.sh -vv
+```
+
+Pre prve primene nad produkcijom pokreni `--check --diff` uz `--limit` na jedan host. Role koje menjaju stanje sistema nepovratno su kao takve označene na vrhu svog `defaults/main.yml`.
 
 ---
 
@@ -230,7 +327,7 @@ Sve varijable su prefiksirane imenom role, čime se izbegavaju kolizije:
 role_<ime_role>_<parametar>
 ```
 
-Svaka rola ima potpunu dokumentaciju varijabli sa primerima u sopstvenom `defaults/main.yml`. To je primarni izvor informacija — ovaj README daje samo pregled principa.
+Svaka rola ima potpunu dokumentaciju varijabli sa primerima u sopstvenom `defaults/main.yml`, a veće role i sopstveni `README.md`. To je primarni izvor informacija — ovaj README daje samo pregled principa.
 
 ---
 
@@ -263,33 +360,6 @@ Ako `role_banner_text` nije definisan, koristi se `role_banner_default_text`.
 
 ---
 
-## Pokretanje
-
-Uvek iz `production/` foldera, kako bi Ansible pročitao lokalni `ansible.cfg`:
-
-```bash
-cd /opt/ansible/production
-
-# Sve role nad svim hostovima
-./apply.sh
-
-# Provera bez izmena
-./apply.sh --check --diff
-
-# Ograničenje na pojedinačan host
-./apply.sh --limit srv-web-01
-
-# Ograničenje na jednu grupu
-./apply.sh --limit apply_banner
-
-# Detaljan ispis
-./apply.sh -vv
-```
-
-Pre prve primene nad produkcijom pokreni `--check --diff` uz `--limit` na jedan host. Role koje menjaju stanje sistema nepovratno su kao takve označene na vrhu svog `defaults/main.yml`.
-
----
-
 ## Dodavanje nove role
 
 Da bi rola bila u skladu sa ostatkom projekta:
@@ -309,9 +379,28 @@ Nijedna vrednost specifična za neko okruženje — imena domena, IP adrese, naz
 
 ---
 
-## Status
+## Role
 
-Projekat je u ranoj fazi. Spisak dostupnih rola sa pripadajućim inventory grupama biće dodat kada role budu implementirane.
+| Rola | Grupa | Status |
+|---|---|---|
+| [`ansible_user`](roles/ansible_user/) | `bootstrap` | implementirana |
+| [`banner`](roles/banner/) | `apply_banner` | implementirana |
+| `timezone` | `apply_timezone` | planirana |
+| `firewall` | `apply_firewall` | planirana |
+| `etc_hosts` | `apply_etc_hosts` | planirana |
+| `users` | `apply_users` | planirana |
+| `repos` | `apply_repos` | planirana |
+| `packages` | `deploy_packages` | planirana |
+| `updates` | `apply_updates` | planirana |
+| `root_ca` | `deploy_root_ca` | planirana |
+| `zabbix_agent` | `deploy_zabbix_agent` | planirana |
+| `zabbix_db` | `deploy_zabbix_db` | planirana |
+| `zabbix_server` | `deploy_zabbix_server` | planirana |
+| `zabbix_web` | `deploy_zabbix_web` | planirana |
+| `zabbix_proxy` | `deploy_zabbix_proxy` | planirana |
+| `zabbix_provisioning` | `apply_zabbix_provisioning` | planirana |
+
+Grupe planiranih rola već postoje u šablonu inventory-ja. Dok rola nije implementirana, play nad njenom grupom pada — ne upisuj hostove u te grupe pre nego što rola bude dodata.
 
 ---
 
