@@ -42,6 +42,22 @@
 
 
 # =====================================================================
+# BOOTSTRAP
+# =====================================================================
+# Sveze instalirani serveri koji jos nemaju "ansible" nalog.
+#
+# Ova grupa se NE pokrece kroz apply.sh, nego jednokratno:
+#
+#   ansible-playbook ../linux/playbooks/bootstrap.yml \
+#     --limit <host> --user root --ask-pass --ask-become-pass
+#
+# Posle uspesne pripreme host se moze prebaciti u ostale grupe.
+
+[bootstrap]
+# srv-web-01
+
+
+# =====================================================================
 # OSNOVNA KONFIGURACIJA SISTEMA
 # =====================================================================
 
