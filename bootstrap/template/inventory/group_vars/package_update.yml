@@ -1,0 +1,20 @@
+---
+# bootstrap/template/inventory/group_vars/package_update.yml
+#
+# Aktivacija role "package_update" za sve hostove u grupi
+# [package_update].
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [package_update] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_package_update_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+#
+# NAPOMENA: play koristi serial: 1 — hostovi se azuriraju jedan po
+# jedan, da azuriranje ne obori celu grupu istovremeno.
+
+role_package_update_enabled: true
