@@ -1,0 +1,23 @@
+---
+# bootstrap/template/inventory/group_vars/deploy_vms.yml
+#
+# Aktivacija role "vcenter_deploy" za sve hostove u grupi
+# [deploy_vms].
+#
+# PAZNJA: ime grupe i ime role se razlikuju. Grupa je [deploy_vms],
+# a rola je "vcenter_deploy" — otuda prekidac role_vcenter_deploy_*.
+#
+# Ovaj fajl NE treba menjati. Rolu ukljucujes tako sto host upises
+# u grupu [deploy_vms] u hosts.ini, a ne izmenom vrednosti ispod.
+#
+# Za izuzetak po pojedinacnom hostu koristi host_vars:
+#   host_vars/<host>.yml
+#     role_vcenter_deploy_enabled: false
+#
+# Parametre role (kako se izvrsava, ne da li) menjaj u
+# group_vars/all.yml ili host_vars/<host>.yml.
+#
+# NAPOMENA: play se izvrsava BEZ become — komunicira sa vCenter
+# API-jem, ne sa ciljnim sistemom.
+
+role_vcenter_deploy_enabled: true
