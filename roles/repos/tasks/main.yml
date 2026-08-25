@@ -1,14 +1,19 @@
 ---
 # roles/repos/tasks/main.yml
 #
-# Dodaje i uklanja APT repozitorijume prema listi role_repos_list.
+# Dodaje i uklanja APT repozitorijume, na dva nacina:
+#   1. direktan upis .sources fajla   (role_repos_list)
+#   2. vendorov .deb release paket    (role_repos_deb_packages)
 #
-# Koristi ansible.builtin.deb822_repository, koji upisuje moderni
-# .sources format u /etc/apt/sources.list.d/ i sam preuzima GPG
-# kljuc kada je signed_by zadat kao URL.
+# Prvi koristi ansible.builtin.deb822_repository, koji sam preuzima
+# GPG kljuc kada je signed_by zadat kao URL.
 
 - name: "Upravljanje APT repozitorijumima"
   block:
+
+    # -----------------------------------------------------------------
+    # Provere
+    # -----------------------------------------------------------------
 
     - name: "Provera da je distribucija podrzana"
       ansible.builtin.assert:
@@ -21,7 +26,7 @@
           host_vars/<host>.yml sa role_repos_enabled: false
         success_msg: "Distribucija je podrzana."
 
-    - name: "Provera da svaki unos ima name i uris"
+    - name: "Provera unosa u role_repos_list"
       ansible.builtin.assert:
         that:
           - item.name is defined
@@ -32,6 +37,24 @@
       loop: "{{ role_repos_list }}"
       loop_control:
         label: "{{ item.name | default('BEZ IMENA') }}"
+
+    # url je obavezan samo za state: present — za uklanjanje je
+    # dovoljno ime paketa.
+    - name: "Provera unosa u role_repos_deb_packages"
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - (item.state | default('present')) == 'absent' or item.url is defined
+        fail_msg: >-
+          Unos u role_repos_deb_packages mora imati "name", a za
+          state: present i "url". Problematican unos: {{ item }}
+      loop: "{{ role_repos_deb_packages }}"
+      loop_control:
+        label: "{{ item.name | default('BEZ IMENA') }}"
+
+    # -----------------------------------------------------------------
+    # 1. Direktan upis APT izvora
+    # -----------------------------------------------------------------
 
     - name: "Folder za GPG kljuceve"
       ansible.builtin.file:
@@ -55,6 +78,35 @@
       loop: "{{ role_repos_list }}"
       loop_control:
         label: "{{ item.name }}"
+      notify: "Osvezi APT kes"
+
+    # -----------------------------------------------------------------
+    # 2. Vendorovi .deb release paketi
+    # -----------------------------------------------------------------
+    # Modul poredi verziju sa vec instaliranom, pa ponovljeno
+    # pokretanje prijavljuje ok. Fajl se ipak preuzima pri svakom
+    # pokretanju — to je cena ovog pristupa.
+
+    - name: "Instalacija .deb release paketa"
+      ansible.builtin.apt:
+        deb: "{{ item.url }}"
+        state: present
+      loop: "{{ role_repos_deb_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: (item.state | default('present')) == 'present'
+      notify: "Osvezi APT kes"
+
+    # purge uklanja i .sources fajl koji je paket upisao
+    - name: "Uklanjanje .deb release paketa"
+      ansible.builtin.apt:
+        name: "{{ item.name }}"
+        state: absent
+        purge: true
+      loop: "{{ role_repos_deb_packages }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: (item.state | default('present')) == 'absent'
       notify: "Osvezi APT kes"
 
   when: role_repos_enabled | default(false) | bool
