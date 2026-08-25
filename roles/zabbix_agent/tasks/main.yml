@@ -1,0 +1,138 @@
+---
+# roles/zabbix_agent/tasks/main.yml
+#
+# Instalira Zabbix agenta i upisuje konfiguraciju:
+#   1. Provere
+#   2. Instalacija paketa
+#   3. PSK kljuc (opciono)
+#   4. Konfiguracioni fajl
+#   5. Servis
+
+- name: "Instalacija i konfiguracija Zabbix agenta"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je distribucija podrzana"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Rola "zabbix_agent" trenutno podrzava iskljucivo
+          Debian/Ubuntu, a ovaj host je
+          {{ ansible_os_family | default('nepoznat') }}.
+        success_msg: "Distribucija je podrzana."
+
+    - name: "Provera da je adresa servera zadata"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_agent_server is defined
+          - role_zabbix_agent_server | length > 0
+        fail_msg: >-
+          role_zabbix_agent_server nije popunjen. Upisi adresu Zabbix
+          servera ili proxy-ja u group_vars/all.yml pre pokretanja.
+          Bez toga bi agent bio instaliran ali ne bi imao kome da se
+          javi.
+        success_msg: "Adresa servera je zadata."
+
+    - name: "Provera izbora agenta"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_agent_package in ['zabbix-agent', 'zabbix-agent2']
+        fail_msg: >-
+          role_zabbix_agent_package mora biti "zabbix-agent" ili
+          "zabbix-agent2", a zadato je
+          "{{ role_zabbix_agent_package }}".
+        success_msg: "Izbor agenta je ispravan."
+
+    # TLS bez kljuca bi proizveo konfiguraciju koju agent odbija da
+    # ucita, pa servis ne bi startovao.
+    - name: "Provera PSK konfiguracije"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_agent_tls_psk_identity | length > 0
+          - role_zabbix_agent_tls_psk | length > 0
+        fail_msg: >-
+          TLS je postavljen na "psk", ali nedostaje
+          role_zabbix_agent_tls_psk_identity ili
+          role_zabbix_agent_tls_psk. Kljuc generisi sa:
+          openssl rand -hex 32
+        success_msg: "PSK konfiguracija je potpuna."
+      when: >-
+        role_zabbix_agent_tls_connect == 'psk' or
+        role_zabbix_agent_tls_accept == 'psk'
+
+    # -----------------------------------------------------------------
+    # 2. Instalacija
+    # -----------------------------------------------------------------
+    # Ako paket nije dostupan, gotovo uvek znaci da Zabbix
+    # repozitorijum nije dodat — poruka na to i upucuje.
+
+    - name: "Instalacija paketa {{ role_zabbix_agent_package }}"
+      ansible.builtin.apt:
+        name: >-
+          {{ role_zabbix_agent_package }}{{
+             '=' ~ role_zabbix_agent_version
+             if role_zabbix_agent_version | length > 0 else '' }}
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      register: _agent_install
+      failed_when:
+        - _agent_install is failed
+      notify: "Restartuj Zabbix agenta"
+
+    # -----------------------------------------------------------------
+    # 3. PSK kljuc
+    # -----------------------------------------------------------------
+    # Fajl mora biti citljiv iskljucivo za zabbix korisnika — agent
+    # odbija da startuje ako su dozvole sire.
+
+    - name: "Upis PSK kljuca"
+      ansible.builtin.copy:
+        content: "{{ role_zabbix_agent_tls_psk }}"
+        dest: "{{ role_zabbix_agent_tls_psk_file }}"
+        owner: zabbix
+        group: zabbix
+        mode: '0400'
+      no_log: true
+      when: >-
+        role_zabbix_agent_tls_connect == 'psk' or
+        role_zabbix_agent_tls_accept == 'psk'
+      notify: "Restartuj Zabbix agenta"
+
+    # -----------------------------------------------------------------
+    # 4. Konfiguracija
+    # -----------------------------------------------------------------
+
+    - name: "Folder za dodatnu konfiguraciju"
+      ansible.builtin.file:
+        path: "{{ _zabbix_agent_include_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: "Upis konfiguracionog fajla"
+      ansible.builtin.template:
+        src: zabbix_agent.conf.j2
+        dest: "{{ _zabbix_agent_config_file }}"
+        owner: root
+        group: zabbix
+        mode: '0640'
+        backup: true
+      notify: "Restartuj Zabbix agenta"
+
+    # -----------------------------------------------------------------
+    # 5. Servis
+    # -----------------------------------------------------------------
+
+    - name: "Servis {{ _zabbix_agent_service }}"
+      ansible.builtin.service:
+        name: "{{ _zabbix_agent_service }}"
+        enabled: "{{ role_zabbix_agent_service_enabled | bool }}"
+        state: "{{ role_zabbix_agent_service_state }}"
+
+  when: role_zabbix_agent_enabled | default(false) | bool
