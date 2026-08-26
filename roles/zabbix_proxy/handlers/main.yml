@@ -1,0 +1,8 @@
+---
+# roles/zabbix_proxy/handlers/main.yml
+
+- name: "Restartuj Zabbix proxy"
+  ansible.builtin.service:
+    name: "{{ _zabbix_proxy_service }}"
+    state: restarted
+  when: role_zabbix_proxy_service_state != 'stopped'
