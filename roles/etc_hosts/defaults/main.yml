@@ -1,0 +1,197 @@
+---
+# roles/etc_hosts/defaults/main.yml
+#
+# Rola "etc_hosts" upravlja unosima u /etc/hosts — statickim
+# mapiranjem imena u IP adrese, nezavisno od DNS-a.
+#
+# Rola se zove etc_hosts, a ne hosts, jer je "hosts" rezervisana rec
+# u Ansible playbook sintaksi.
+#
+# Aktivacija ide preko clanstva hosta u grupi [apply_etc_hosts], koja
+# kroz group_vars/apply_etc_hosts.yml postavlja role_etc_hosts_enabled.
+# Vrednost ispod je samo podrazumevana.
+#
+# Parametre menjaj u:
+#   group_vars/all.yml        — globalno
+#   host_vars/<host>.yml      — za pojedinacan host
+#
+# PAZNJA: /etc/hosts je jedan od retkih fajlova ciji gubitak sadrzaja
+# odmah pogadja ceo sistem. Bez linije za localhost sudo pocinje da
+# kasni po nekoliko sekundi, a servisi koji razresavaju sopstveno ime
+# prestaju da se podizu. Zato je podrazumevani rezim ADITIVAN — rola
+# upisuje samo svoj oznaceni blok i ostatak fajla ne dira.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+# Kada je false, rola ne dira nista.
+#
+role_etc_hosts_enabled: false
+
+
+# =====================================================================
+# REZIM RADA
+# =====================================================================
+# Dve dozvoljene vrednosti:
+#
+#   block  — u fajl se upisuje samo oznaceni blok sa unosima iz
+#            role_etc_hosts_entries. Sve ostalo (localhost, linije
+#            koje je dodao cloud-init ili neko rucno) ostaje netaknuto.
+#            Bezbedno, i podrazumevano.
+#
+#   file   — ceo /etc/hosts se upisuje iz sablona. Rola tada kontrolise
+#            i linije za localhost. Koristi kada zelis da fajl bude
+#            identican na svim hostovima i da rucne izmene nestaju.
+#
+# PAZNJA za rezim file: sve sto nije opisano varijablama ove role
+# bice obrisano pri prvom pokretanju. Fajl se cuva kroz backup, ali
+# pokreni --check --diff pre primene.
+#
+role_etc_hosts_manage_mode: block
+
+
+# =====================================================================
+# UNOSI
+# =====================================================================
+# Lista unosa. Svaki unos ima:
+#
+#   ip         — IPv4 ili IPv6 adresa (obavezno)
+#   hostnames  — lista imena, ili jedno ime kao string (obavezno)
+#   comment    — komentar na kraju linije (opciono)
+#
+# Prvo ime u listi je kanonsko; ostala su aliasi. Konvencija je da
+# prvo ide FQDN, pa kratko ime:
+#
+#   group_vars/all.yml
+#     role_etc_hosts_entries:
+#       - ip: 10.0.0.10
+#         hostnames:
+#           - zabbix.example.com
+#           - zabbix
+#         comment: Zabbix server
+#
+#       - ip: 10.0.0.53
+#         hostnames: ntp.example.com
+#
+# Prazna lista u rezimu "block" znaci uklanjanje bloka iz fajla, ne
+# upis praznog bloka.
+#
+role_etc_hosts_entries: []
+
+
+# =====================================================================
+# FAJL
+# =====================================================================
+
+# Putanja. Menja se prakticno samo pri testiranju nad kopijom.
+#
+role_etc_hosts_path: /etc/hosts
+
+# Kopija prethodnog sadrzaja pre izmene. Ovde je podrazumevano true,
+# za razliku od vecine ostalih rola — cena jednog suvisnog fajla je
+# zanemarljiva u odnosu na host koji je ostao bez razresavanja imena.
+#
+role_etc_hosts_backup: true
+
+role_etc_hosts_owner: root
+role_etc_hosts_group: root
+role_etc_hosts_mode: '0644'
+
+
+# =====================================================================
+# REZIM "block"
+# =====================================================================
+
+# Tekst markera koji ogranicava blok. Rola upisuje:
+#
+#   # BEGIN ANSIBLE ROLA: etc_hosts
+#   ...
+#   # END ANSIBLE ROLA: etc_hosts
+#
+# Marker mora biti jedinstven po fajlu. Menjaj samo ako u isti fajl
+# pise jos neka automatika sa istim markerom.
+#
+role_etc_hosts_block_marker: "ANSIBLE ROLA: etc_hosts"
+
+# Gde se blok upisuje ako jos ne postoji. EOF je bezbedno — unosi
+# dolaze posle linija za localhost, pa ih ne mogu nadjacati.
+#
+role_etc_hosts_block_insertafter: EOF
+
+# present ili absent. Postavi absent da bi se blok uklonio, a da pri
+# tom zadrzis listu unosa u inventory-ju.
+#
+role_etc_hosts_block_state: present
+
+
+# =====================================================================
+# REZIM "file"
+# =====================================================================
+# Vrednosti ispod se koriste iskljucivo kada je
+# role_etc_hosts_manage_mode: file
+
+# Linije za lokalne adrese, upisuju se na vrh fajla.
+#
+# Ovo su podrazumevane vrednosti Debian/Ubuntu sistema. Ne skracuj ih
+# bez razloga — ip6-* aliasi se koriste u mreznim skriptama, a bez
+# 127.0.0.1 sistem prestaje uredno da radi.
+#
+role_etc_hosts_localhost_lines:
+  - "127.0.0.1   localhost"
+  - "::1         localhost ip6-localhost ip6-loopback"
+  - "ff02::1     ip6-allnodes"
+  - "ff02::2     ip6-allrouters"
+
+# Linija sa sopstvenim imenom hosta.
+#
+# Debian konvencija je da se ime masine mapira na 127.0.1.1, odvojeno
+# od 127.0.0.1. Razlog: masina bez stalne IP adrese i dalje mora moci
+# da razresi sopstveno ime. Bez ove linije sudo prijavljuje
+# "unable to resolve host" i ceka na tajmaut pri svakom pozivu.
+#
+role_etc_hosts_self_enabled: true
+role_etc_hosts_self_ip: 127.0.1.1
+
+# Imena za liniju iznad. Prazna lista znaci: izvedi iz prikupljenih
+# podataka o sistemu (ansible_fqdn pa ansible_hostname).
+#
+# Zadaj rucno samo ako se FQDN na hostu razlikuje od onoga sto zelis
+# u /etc/hosts:
+#
+#   role_etc_hosts_self_names:
+#     - srv-web-01.example.com
+#     - srv-web-01
+#
+role_etc_hosts_self_names: []
+
+
+# =====================================================================
+# CLOUD-INIT
+# =====================================================================
+# Na cloud image-ima (i na ISO instalaciji koja je prosla kroz
+# subiquity) cloud-init cesto ima manage_etc_hosts: true. To znaci da
+# se /etc/hosts REGENERISE iz sablona pri svakom podizanju sistema —
+# sve sto je rola upisala nestaje posle prvog restarta, bez ijedne
+# poruke o gresci.
+#
+# Kada je provera ukljucena, rola to prepoznaje i ispisuje upozorenje.
+
+role_etc_hosts_cloud_init_check: true
+
+# Kada je true, rola upisuje drop-in koji gasi to ponasanje:
+#
+#   /etc/cloud/cloud.cfg.d/99-ansible-etc-hosts.cfg
+#     manage_etc_hosts: false
+#
+# Podrazumevano false, jer je iskljucivanje dela cloud-init-a odluka
+# koja prevazilazi ovu rolu. Ukljuci kada je jasno da /etc/hosts
+# ubuduce drzi Ansible.
+#
+# NAPOMENA: drop-in vazi od sledeceg podizanja sistema. Fajl koji je
+# cloud-init vec generisao u ovom podizanju rola i dalje menja
+# normalno.
+#
+role_etc_hosts_cloud_init_disable: false
+
+role_etc_hosts_cloud_init_file: /etc/cloud/cloud.cfg.d/99-ansible-etc-hosts.cfg
