@@ -2,11 +2,11 @@
 #
 # Zastita javnog repozitorijuma.
 #
-# Ovde ide SAMO kod: role, playbook i bootstrap sablon.
+# Ovde ide SAMO kod: role, playbook-ovi i bootstrap sablon.
 # Inventory, varijable i tajne pripadaju radnom folderu izvan git-a.
 #
-# NAPOMENA: bootstrap/template/inventory/ je namerno IZUZET iz pravila
-# ispod — to je prazan sablon bez stvarnih podataka i mora ostati u
+# NAPOMENA: bootstrap/template/ je namerno IZUZET iz pravila ispod —
+# to je prazan sablon bez stvarnih podataka i mora ostati u
 # repozitorijumu.
 
 # --- Inventory (osim sablona) ----------------------------------------
@@ -37,7 +37,10 @@ secrets.yaml
 .env*
 
 # --- Ansible radni fajlovi -------------------------------------------
-ansible.cfg
+# Kosa crta na pocetku vezuje pravilo za KOREN repozitorijuma.
+# Bez nje bi bilo ignorisano i bootstrap/template/ansible.cfg, koje
+# mora ostati u repozitorijumu.
+/ansible.cfg
 *.retry
 .facts/
 fact_cache/
