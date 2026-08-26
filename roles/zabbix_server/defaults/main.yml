@@ -9,15 +9,15 @@
 #
 # PREDUSLOVI:
 #   1. Zabbix repozitorijum — rola "repos", grupa [apply_repos]
-#   2. Baza i korisnik vec kreirani — rola "zabbix_db"
+#   2. Baza sa UVEZENOM SEMOM — rola "zabbix_db"
 #
 # PODELA POSLA SA ROLOM zabbix_db:
-#   zabbix_db      — instalira bazu, kreira praznu bazu i korisnika
-#   zabbix_server  — uvozi semu u tu bazu (skripte dolaze uz paket)
+#   zabbix_db      — MySQL, baza, sema, nalozi
+#   zabbix_server  — instalira i konfigurise servis
 #
-# UPOZORENJE: uvoz seme je jednokratna, nepovratna operacija nad
-# bazom. Rola proverava da li sema vec postoji i preskace uvoz ako
-# jeste, ali prvi uvoz nad pogresnom bazom se ne moze ponistiti.
+# Ova rola bazu NE dira: ne kreira je, ne uvozi semu, ne menja
+# privilegije. Samo se na nju povezuje. Ako sema ne postoji, servis
+# se pokrene i odmah ugasi, sa porukom u svom logu.
 
 
 # =====================================================================
@@ -33,14 +33,20 @@ role_zabbix_server_enabled: false
 # mysql — MySQL, MariaDB, Percona (podrazumevano)
 # pgsql — PostgreSQL
 #
-# Odredjuje ime paketa, putanju .sql skripte i klijentski paket.
-# Rola ih sama izvodi.
+# Odredjuje iskljucivo ime paketa (zabbix-server-mysql naspram
+# zabbix-server-pgsql). Rola ga sama izvodi.
+#
+# PAZNJA: rola "zabbix_db" pokriva samo MySQL. Uz pgsql bazu, semu
+# i naloge moras pripremiti sam, pre pokretanja ove role.
 #
 role_zabbix_server_db_backend: mysql
 
 # Zakovana verzija paketa. Prazna vrednost instalira najnoviju.
 #
 #   role_zabbix_server_version: "1:7.0.19-1+ubuntu24.04"
+#
+# Ako zakujes ovu vrednost, zakuj i role_zabbix_db_sql_scripts_version
+# na hostu baze — sema i server moraju biti iste verzije.
 #
 role_zabbix_server_version: ""
 
@@ -49,7 +55,8 @@ role_zabbix_server_version: ""
 # VEZA SA BAZOM
 # =====================================================================
 # Prazan DBHost znaci lokalni socket. Za bazu na drugom hostu upisi
-# adresu.
+# adresu — IP ili ime hosta, NIKADA "localhost". MySQL klijent
+# "localhost" tumaci kao unix socket i ignorise DBPort.
 #
 role_zabbix_server_db_host: localhost
 role_zabbix_server_db_port: 3306
@@ -58,11 +65,15 @@ role_zabbix_server_db_user: zabbix
 
 # OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
 #
-# Lozinka je TAJNA i ne sme se naci u repozitorijumu. Sifruj je:
+# Mora biti ISTA kao role_zabbix_db_password na hostu baze. Ako se
+# vrednosti raziđu, server pri startu prijavi gresku 1045 i ugasi se.
 #
-#   ansible-vault encrypt_string 'lozinka' --name 'role_zabbix_server_db_password'
+#   host_vars/srv-mon-01.yml
+#     role_zabbix_server_db_password: "izaberi-dugacku-lozinku"
 #
-# pa rezultat upisi u group_vars/all.yml ili host_vars/<host>.yml.
+# host_vars zivi na kontrolnom cvoru, van git repozitorijuma, pa
+# lozinka nikada ne ulazi u istoriju verzija. Fajl treba da ima
+# dozvole 0600.
 #
 role_zabbix_server_db_password: ""
 
@@ -70,24 +81,6 @@ role_zabbix_server_db_password: ""
 # ili "localhost" na MySQL-u.
 #
 role_zabbix_server_db_socket: ""
-
-
-# =====================================================================
-# UVOZ SEME
-# =====================================================================
-# Sema se uvozi samo jednom, pri prvoj primeni role. Provera se radi
-# nad tabelom "dbversion" — ako postoji, uvoz se preskace.
-#
-role_zabbix_server_db_import: false
-
-# MySQL 8.0 sa ukljucenim binarnim logom odbija kreiranje funkcija
-# bez ove opcije. Rola je privremeno ukljucuje pre uvoza i vraca na
-# staru vrednost posle.
-#
-# Postavi na false ako nemas SUPER privilegiju na bazi — tada opciju
-# mora podesiti administrator baze rucno, pre pokretanja role.
-#
-role_zabbix_server_db_set_log_bin_trust: true
 
 
 # =====================================================================
@@ -129,7 +122,8 @@ role_zabbix_server_log_slow_queries: 3000
 # iskoriscenost kroz "Zabbix server health" template.
 #
 # PAZNJA: svaki proces trosi memoriju i konekciju ka bazi. Zbir
-# svih procesa ne sme preci max_connections na bazi.
+# svih procesa ne sme preci max_connections na bazi
+# (role_zabbix_db_max_connections, podrazumevano 200).
 
 role_zabbix_server_start_pollers: 5
 role_zabbix_server_start_pollers_unreachable: 1
@@ -180,6 +174,8 @@ role_zabbix_server_timeout: 4
 #   host_vars/srv-mon-01.yml
 #     role_zabbix_server_ha_node_name: "node-01"
 #     role_zabbix_server_ha_node_address: "10.0.0.50:10051"
+#
+# Svi cvorovi koriste ISTU bazu.
 #
 role_zabbix_server_ha_node_name: ""
 role_zabbix_server_ha_node_address: ""
