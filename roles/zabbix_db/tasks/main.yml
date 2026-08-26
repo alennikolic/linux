@@ -2,15 +2,18 @@
 # roles/zabbix_db/tasks/main.yml
 #
 #   1. Provere
-#   2. Instalacija baze i Python biblioteke
+#   2. Instalacija MySQL-a i pratecih paketa
 #   3. Konfiguracija performansi
 #   4. Kreiranje baze
-#   5. Kreiranje korisnika za Zabbix server
-#   6. Kreiranje korisnika za frontend
+#   5. Uvoz seme (jednokratno)
+#   6. Korisnik za Zabbix server
+#   7. Korisnik za frontend
 #
 # Prijava kao root ide kroz unix socket. Na Ubuntu i Debianu root
 # koristi auth_socket dodatak, pa lozinka nije potrebna — dovoljno
-# je da se task izvrsava sa become.
+# je da se task izvrsava sa become. Ta ista okolnost je razlog zasto
+# je uvoz seme ovde, a ne u roli zabbix_server: root ima privilegiju
+# koja je za uvoz neophodna, a nalog "zabbix" je nema.
 
 - name: "Priprema baze za Zabbix"
   block:
@@ -28,37 +31,31 @@
           a ovaj host je {{ ansible_os_family | default('nepoznat') }}.
         success_msg: "Distribucija je podrzana."
 
-    - name: "Provera izbora motora"
-      ansible.builtin.assert:
-        that:
-          - role_zabbix_db_engine in ['mysql', 'mariadb']
-        fail_msg: >-
-          role_zabbix_db_engine mora biti "mysql" ili "mariadb", a
-          zadato je "{{ role_zabbix_db_engine }}".
-        success_msg: "Izbor motora je ispravan."
-
     - name: "Provera da je lozinka zadata"
       ansible.builtin.assert:
         that:
           - role_zabbix_db_password is defined
           - role_zabbix_db_password | length > 0
         fail_msg: >-
-          role_zabbix_db_password nije popunjen. Sifruj lozinku sa:
-          ansible-vault encrypt_string 'lozinka' --name '_zabbix_db_pass'
-          Ista vrednost mora biti i u role_zabbix_server_db_password.
+          role_zabbix_db_password nije popunjen. Upisi ga u
+          host_vars/<host>.yml na kontrolnom cvoru. Ista vrednost
+          mora biti i u role_zabbix_server_db_password, inace se
+          server nece prijaviti na bazu.
         success_msg: "Lozinka je zadata."
 
     # Ako se ovde omakne string umesto liste, mysql_user bi prosao
-    # kroz svaki KARAKTER stringa kao kroz zaseban host.
-    - name: "Provera da je role_zabbix_db_server_user_hosts lista"
+    # kroz svaki KARAKTER stringa kao kroz zaseban host — nastalo bi
+    # desetak besmislenih naloga, bez ijedne greske u ispisu.
+    - name: "Provera da je role_zabbix_db_server_hosts neprazna lista"
       ansible.builtin.assert:
         that:
-          - role_zabbix_db_server_user_hosts | type_debug == 'list'
+          - role_zabbix_db_server_hosts | type_debug == 'list'
+          - role_zabbix_db_server_hosts | length > 0
         fail_msg: >-
-          role_zabbix_db_server_user_hosts mora biti lista, a zadato je
-          {{ role_zabbix_db_server_user_hosts | type_debug }}. Za jednu
-          adresu napisi listu sa jednom stavkom.
-        success_msg: "role_zabbix_db_server_user_hosts je lista."
+          role_zabbix_db_server_hosts mora biti neprazna lista, a
+          zadato je {{ role_zabbix_db_server_hosts | type_debug }}.
+          Za jednu adresu napisi listu sa jednom stavkom.
+        success_msg: "role_zabbix_db_server_hosts je ispravna lista."
 
     # Pogresna kolacija se otkriva tek kada frontend prijavi gresku,
     # dugo posle uvoza seme. Zato provera ide unapred.
@@ -79,16 +76,16 @@
     - name: "Provere naloga za frontend"
       ansible.builtin.assert:
         that:
-          - role_zabbix_db_frontend_user != role_zabbix_db_user
+          - role_zabbix_db_frontend_user != role_zabbix_db_server_user
           - role_zabbix_db_frontend_password | length > 0
-          - role_zabbix_db_frontend_user_hosts | type_debug == 'list'
-          - role_zabbix_db_frontend_user_hosts | length > 0
+          - role_zabbix_db_frontend_hosts | type_debug == 'list'
+          - role_zabbix_db_frontend_hosts | length > 0
           - role_zabbix_db_frontend_priv | length > 0
         fail_msg: >-
           Nalog za frontend je ukljucen, ali podesavanja nisu potpuna.
-          Potrebno je: ime razlicito od role_zabbix_db_user, popunjen
-          role_zabbix_db_frontend_password i neprazna lista
-          role_zabbix_db_frontend_user_hosts.
+          Potrebno je: ime razlicito od role_zabbix_db_server_user,
+          popunjen role_zabbix_db_frontend_password i neprazna lista
+          role_zabbix_db_frontend_hosts.
         success_msg: "Podesavanja naloga za frontend su ispravna."
       when: role_zabbix_db_frontend_enabled | bool
 
@@ -104,11 +101,55 @@
         cache_valid_time: 3600
       when: role_zabbix_db_install_server | bool
 
+    # Paket mysql-server povlaci klijenta sam. Zasebna instalacija je
+    # potrebna samo kada je instalacija servera preskocena, a uvoz
+    # seme trazen — komanda "mysql" tada mora odnekud doci.
+    - name: "Instalacija {{ _zabbix_db_client_package }}"
+      ansible.builtin.apt:
+        name: "{{ _zabbix_db_client_package }}"
+        state: present
+      when:
+        - not (role_zabbix_db_install_server | bool)
+        - role_zabbix_db_schema_import | bool
+
     # Moduli iz community.mysql zahtevaju PyMySQL na CILJNOM sistemu.
     - name: "Instalacija PyMySQL biblioteke"
       ansible.builtin.apt:
         name: python3-pymysql
         state: present
+
+    # Sema dolazi iz Zabbix repozitorijuma. Ako paket nije dostupan,
+    # gotovo uvek znaci da repozitorijum nije dodat — rescue grana
+    # ispod dodaje objasnjenje na originalnu apt gresku.
+    - name: "Instalacija SQL skripti"
+      block:
+
+        - name: "Instalacija paketa zabbix-sql-scripts"
+          ansible.builtin.apt:
+            name: >-
+              zabbix-sql-scripts{{
+                 '=' ~ role_zabbix_db_sql_scripts_version
+                 if role_zabbix_db_sql_scripts_version | length > 0
+                 else '' }}
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+
+      rescue:
+
+        - name: "Objasnjenje neuspele instalacije SQL skripti"
+          ansible.builtin.fail:
+            msg: >-
+              Instalacija paketa "zabbix-sql-scripts" nije uspela.
+              Najcesci uzrok je da Zabbix repozitorijum nije dodat —
+              host mora biti i u grupi [apply_repos], a apply_repos
+              mora ici pre deploy_zabbix_db u playbook.yml. Proveri sa:
+              apt-cache policy zabbix-sql-scripts
+              Druga mogucnost je zakovana verzija koja u repozitorijumu
+              ne postoji; dostupne vidis sa:
+              apt-cache madison zabbix-sql-scripts
+
+      when: role_zabbix_db_schema_import | bool
 
     - name: "Servis {{ _zabbix_db_service }}"
       ansible.builtin.service:
@@ -120,11 +161,12 @@
     # 3. Konfiguracija
     # -----------------------------------------------------------------
     # Zaseban fajl, ne glavna konfiguracija — nadogradnja paketa je
-    # tako ne prepisuje. Prefiks 99- osigurava da se ucita poslednja.
+    # tako ne prepisuje. Prefiks zz- osigurava da se ucita poslednja;
+    # objasnjenje je u vars/main.yml.
 
     - name: "Upis konfiguracije performansi"
       ansible.builtin.template:
-        src: 99-zabbix.cnf.j2
+        src: zz-zabbix.cnf.j2
         dest: "{{ _zabbix_db_config_file }}"
         owner: root
         group: root
@@ -132,8 +174,9 @@
         backup: true
       notify: "Restartuj bazu"
 
-    # Konfiguracija mora vaziti pre kreiranja baze, jer neka
-    # podesavanja uticu na nacin kreiranja tabela.
+    # Konfiguracija mora vaziti pre kreiranja baze i pre uvoza seme:
+    # collation-server odredjuje kako se kreiraju tabele, a
+    # max_allowed_packet da li ce uvoz uopste proci.
     - name: "Primena konfiguracije pre nastavka"
       ansible.builtin.meta: flush_handlers
 
@@ -149,30 +192,188 @@
         state: present
         login_unix_socket: "{{ _zabbix_db_login_socket }}"
 
+    # Baza je mogla biti kreirana ranije, rucno ili starijom verzijom
+    # ove role, sa pogresnom kolacijom. Uvoz bi i tada prosao, a
+    # greska bi se pojavila tek u frontendu. Zato se stvarno stanje
+    # cita iz information_schema, ne pretpostavlja iz varijabli.
+    - name: "Citanje stvarne kolacije baze"
+      community.mysql.mysql_query:
+        login_db: mysql
+        login_unix_socket: "{{ _zabbix_db_login_socket }}"
+        query: >-
+          SELECT default_character_set_name AS charset,
+                 default_collation_name AS collation
+          FROM information_schema.schemata
+          WHERE schema_name = %(db)s
+        named_args:
+          db: "{{ role_zabbix_db_name }}"
+      register: _zabbix_db_charset_check
+      changed_when: false
+      check_mode: false
+
+    - name: "Potvrda da baza ima ispravnu kolaciju"
+      ansible.builtin.assert:
+        that:
+          - _zabbix_db_charset_check.query_result[0] | length > 0
+          - _zabbix_db_charset_check.query_result[0][0].charset == role_zabbix_db_encoding
+          - _zabbix_db_charset_check.query_result[0][0].collation == role_zabbix_db_collation
+        fail_msg: >-
+          Baza "{{ role_zabbix_db_name }}" postoji, ali ima
+          {{ _zabbix_db_charset_check.query_result[0][0].charset | default('?') }} /
+          {{ _zabbix_db_charset_check.query_result[0][0].collation | default('?') }}
+          umesto {{ role_zabbix_db_encoding }} / {{ role_zabbix_db_collation }}.
+          Konverzija postojece seme nije pouzdana. Ako u bazi nema
+          podataka do kojih ti je stalo, obrisi je i pusti rolu ponovo:
+          sudo mysql -e "DROP DATABASE {{ role_zabbix_db_name }};"
+        success_msg: "Kolacija baze je ispravna."
+
     # -----------------------------------------------------------------
-    # 5. Korisnik za Zabbix server
+    # 5. Uvoz seme
+    # -----------------------------------------------------------------
+    # Jednokratna, nepovratna operacija. Provera se svodi na pitanje
+    # da li postoji tabela "dbversion".
+    #
+    # ZAMKA: dbversion se kreira tek pri KRAJU skripte. Ako uvoz pukne
+    # na pola, u bazi ostaje 150-200 tabela, ali provera to ne vidi,
+    # pa rola pri sledecem pokretanju pokusava ponovo i pada na prvom
+    # CREATE TABLE za vec postojecu tabelu. Jedini ispravan oporavak
+    # je brisanje baze.
+
+    - name: "Provera da li sema vec postoji"
+      community.mysql.mysql_query:
+        login_db: mysql
+        login_unix_socket: "{{ _zabbix_db_login_socket }}"
+        query: >-
+          SELECT COUNT(*) AS cnt
+          FROM information_schema.tables
+          WHERE table_schema = %(db)s AND table_name = 'dbversion'
+        named_args:
+          db: "{{ role_zabbix_db_name }}"
+      register: _zabbix_db_schema_check
+      changed_when: false
+      check_mode: false
+      when: role_zabbix_db_schema_import | bool
+
+    - name: "Odluka o uvozu seme"
+      ansible.builtin.set_fact:
+        _zabbix_db_schema_missing: >-
+          {{ (_zabbix_db_schema_check.query_result[0][0].cnt | default(1) | int) == 0 }}
+      when: role_zabbix_db_schema_import | bool
+
+    - name: "Pronalazenje SQL skripte sa semom"
+      ansible.builtin.find:
+        paths: "{{ _zabbix_db_sql_scripts_dir }}"
+        patterns:
+          - server.sql
+          - server.sql.gz
+      register: _zabbix_db_schema_find
+      when: _zabbix_db_schema_missing | default(false) | bool
+
+    - name: "Provera da je SQL skripta pronadjena"
+      ansible.builtin.assert:
+        that:
+          - _zabbix_db_schema_find.files | length > 0
+        fail_msg: >-
+          U folderu {{ _zabbix_db_sql_scripts_dir }} nema ni
+          server.sql ni server.sql.gz. Proveri sta je paket
+          zabbix-sql-scripts stvarno isporucio:
+          dpkg -L zabbix-sql-scripts | grep mysql
+        success_msg: "SQL skripta je pronadjena."
+      when: _zabbix_db_schema_missing | default(false) | bool
+
+    # Sortiranje po imenu daje redosled "server.sql", "server.sql.gz",
+    # pa poslednja stavka znaci da .gz ima prednost kada oba postoje.
+    # Zabbix na Ubuntu isporucuje kompresovanu verziju, ali se to
+    # menjalo izmedju izdanja, pa se ne pretpostavlja.
+    - name: "Izbor SQL skripte"
+      ansible.builtin.set_fact:
+        _zabbix_db_schema_path: >-
+          {{ _zabbix_db_schema_find.files | map(attribute='path') | sort | last }}
+      when: _zabbix_db_schema_missing | default(false) | bool
+
+    - name: "Izbor nacina citanja skripte"
+      ansible.builtin.set_fact:
+        _zabbix_db_schema_reader: >-
+          {{ 'zcat' if _zabbix_db_schema_path is search('\.gz$') else 'cat' }}
+      when: _zabbix_db_schema_missing | default(false) | bool
+
+    # MySQL 8.0 sa binarnim logom odbija CREATE FUNCTION bez ove
+    # opcije. Zatecena vrednost se cuva da bi se posle uvoza vratila —
+    # ako je administrator opciju vec trajno ukljucio, rola je ne sme
+    # ugasiti.
+    - name: "Citanje zatecene vrednosti log_bin_trust_function_creators"
+      community.mysql.mysql_query:
+        login_db: mysql
+        login_unix_socket: "{{ _zabbix_db_login_socket }}"
+        query: "SELECT @@GLOBAL.log_bin_trust_function_creators AS v"
+      register: _zabbix_db_log_bin_trust_before
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - _zabbix_db_schema_missing | default(false) | bool
+        - role_zabbix_db_log_bin_trust | bool
+
+    - name: "Privremeno ukljucivanje log_bin_trust_function_creators"
+      community.mysql.mysql_variables:
+        variable: log_bin_trust_function_creators
+        value: "1"
+        login_unix_socket: "{{ _zabbix_db_login_socket }}"
+      when:
+        - _zabbix_db_schema_missing | default(false) | bool
+        - role_zabbix_db_log_bin_trust | bool
+        - _zabbix_db_log_bin_trust_before.query_result is defined
+
+    # Uvoz ide kao root kroz unix socket, bez lozinke. Zato ovde nema
+    # ni MYSQL_PWD ni no_log — a to znaci da se prava greska vidi u
+    # ispisu, umesto reci "censored". Upravo je to razlog zbog kojeg
+    # uvoz pripada ovoj roli, a ne roli zabbix_server.
+    - name: "Uvoz seme u bazu (jednokratno)"
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          {{ _zabbix_db_schema_reader }} {{ _zabbix_db_schema_path }} |
+          mysql --socket={{ _zabbix_db_login_socket }}
+          --default-character-set={{ role_zabbix_db_encoding }}
+          {{ role_zabbix_db_name }}
+        executable: /bin/bash
+      changed_when: true
+      when: _zabbix_db_schema_missing | default(false) | bool
+
+    - name: "Vracanje log_bin_trust_function_creators na zatecenu vrednost"
+      community.mysql.mysql_variables:
+        variable: log_bin_trust_function_creators
+        value: "{{ _zabbix_db_log_bin_trust_before.query_result[0][0].v | int }}"
+        login_unix_socket: "{{ _zabbix_db_login_socket }}"
+      when:
+        - _zabbix_db_schema_missing | default(false) | bool
+        - role_zabbix_db_log_bin_trust | bool
+        - _zabbix_db_log_bin_trust_before.query_result is defined
+
+    # -----------------------------------------------------------------
+    # 6. Korisnik za Zabbix server
     # -----------------------------------------------------------------
     # ALL na jednoj bazi je vise nego sto Zabbix serveru treba u
-    # svakodnevnom radu, ali je neophodno za uvoz seme i za nadogradnju
-    # baze pri prelasku na noviju verziju Zabbix-a.
+    # svakodnevnom radu, ali je neophodno za nadogradnju baze pri
+    # prelasku na noviju verziju Zabbix-a.
     #
     # Jedan nalog po hostu iz liste. Rola postojece naloge sa drugih
     # adresa NE brise — to je svesna odluka, jer bi automatsko brisanje
     # moglo prekinuti vezu servera koji trenutno radi.
 
-    - name: "Kreiranje korisnika {{ role_zabbix_db_user }}"
+    - name: "Kreiranje korisnika {{ role_zabbix_db_server_user }}"
       community.mysql.mysql_user:
-        name: "{{ role_zabbix_db_user }}"
+        name: "{{ role_zabbix_db_server_user }}"
         password: "{{ role_zabbix_db_password }}"
         host: "{{ item }}"
         priv: "{{ role_zabbix_db_name }}.*:ALL"
         state: present
         login_unix_socket: "{{ _zabbix_db_login_socket }}"
-      loop: "{{ _zabbix_db_server_user_hosts }}"
+      loop: "{{ role_zabbix_db_server_hosts }}"
       no_log: true
 
     # -----------------------------------------------------------------
-    # 6. Korisnik za frontend
+    # 7. Korisnik za frontend
     # -----------------------------------------------------------------
     # Frontend cita bazu direktno, ali ne menja strukturu tabela.
     # Privilegije su ogranicene na rad sa podacima.
@@ -185,7 +386,7 @@
         priv: "{{ role_zabbix_db_name }}.*:{{ role_zabbix_db_frontend_priv }}"
         state: present
         login_unix_socket: "{{ _zabbix_db_login_socket }}"
-      loop: "{{ role_zabbix_db_frontend_user_hosts }}"
+      loop: "{{ role_zabbix_db_frontend_hosts }}"
       no_log: true
       when: role_zabbix_db_frontend_enabled | bool
 
