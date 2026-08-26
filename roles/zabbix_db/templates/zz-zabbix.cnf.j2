@@ -1,0 +1,33 @@
+{{ '#' }} {{ _zabbix_db_config_file }}
+{{ '#' }}
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: zabbix_db
+{{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+{{ '#' }}
+{{ '#' }} Prefiks zz- osigurava da se ovaj fajl ucita POSLE svih
+{{ '#' }} ostalih iz istog foldera. MySQL cita fajlove azbucnim redom
+{{ '#' }} i primenjuje poslednju procitanu vrednost svake opcije, pa
+{{ '#' }} samo tako podesavanja odavde pobedjuju ona iz mysqld.cnf.
+
+[mysqld]
+{{ '#' }} --- Mreza ------------------------------------------------------
+bind-address = {{ role_zabbix_db_bind_address }}
+port = {{ role_zabbix_db_port }}
+
+{{ '#' }} --- Kodni raspored --------------------------------------------
+character-set-server = {{ role_zabbix_db_encoding }}
+collation-server = {{ role_zabbix_db_collation }}
+
+{{ '#' }} --- InnoDB ----------------------------------------------------
+innodb_buffer_pool_size = {{ role_zabbix_db_innodb_buffer_pool_size }}
+innodb_buffer_pool_instances = {{ role_zabbix_db_innodb_buffer_pool_instances }}
+innodb_log_file_size = {{ role_zabbix_db_innodb_log_file_size }}
+innodb_flush_log_at_trx_commit = {{ role_zabbix_db_innodb_flush_log_at_trx_commit }}
+
+{{ '#' }} --- Konekcije -------------------------------------------------
+max_connections = {{ role_zabbix_db_max_connections }}
+max_allowed_packet = {{ role_zabbix_db_max_allowed_packet }}
+{% if role_zabbix_db_extra_config | length > 0 %}
+
+{{ '#' }} --- Dodatna konfiguracija -------------------------------------
+{{ role_zabbix_db_extra_config }}
+{% endif %}
