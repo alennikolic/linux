@@ -1,0 +1,36 @@
+---
+# roles/root_ca/vars/main.yml
+#
+# Izvedene vrednosti. NE menjati kroz inventory.
+#
+# Prefiks donje crte oznacava da varijabla nije deo javnog interfejsa
+# role.
+
+_root_ca_private_dir: "{{ role_root_ca_dir }}/private"
+_root_ca_certs_dir: "{{ role_root_ca_dir }}/certs"
+_root_ca_csr_dir: "{{ role_root_ca_dir }}/csr"
+
+_root_ca_key: "{{ _root_ca_private_dir }}/{{ role_root_ca_basename }}.key"
+_root_ca_crt: "{{ _root_ca_certs_dir }}/{{ role_root_ca_basename }}.crt"
+_root_ca_csr: "{{ _root_ca_csr_dir }}/{{ role_root_ca_basename }}.csr"
+
+_root_ca_trust_path: "/usr/local/share/ca-certificates/{{ role_root_ca_trust_filename }}.crt"
+
+# Subject CA. Prazna polja se izbacuju — openssl_csr bi ih inace
+# upisao kao prazne atribute.
+_root_ca_subject: >-
+  {{ {
+       'CN': role_root_ca_common_name,
+       'C':  role_root_ca_country,
+       'ST': role_root_ca_state_or_province,
+       'L':  role_root_ca_locality,
+       'O':  role_root_ca_organization,
+       'OU': role_root_ca_ou,
+     }
+     | dict2items | rejectattr('value', 'equalto', '') | items2dict }}
+
+# Ista polja bez CN — osnova za subject izdatih sertifikata, kada je
+# role_root_ca_cert_subject_from_ca ukljucen.
+_root_ca_subject_base: >-
+  {{ _root_ca_subject | dict2items
+     | rejectattr('key', 'equalto', 'CN') | items2dict }}
