@@ -1,0 +1,16 @@
+---
+# roles/zabbix_proxy/vars/main.yml
+#
+# Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
+# group_vars ili host_vars.
+
+# zabbix-proxy-sqlite3 / zabbix-proxy-mysql / zabbix-proxy-pgsql
+_zabbix_proxy_package: "zabbix-proxy-{{ role_zabbix_proxy_db_backend }}"
+
+_zabbix_proxy_service: zabbix-proxy
+_zabbix_proxy_config_file: /etc/zabbix/zabbix_proxy.conf
+
+# Folder u kojem zivi SQLite fajl.
+_zabbix_proxy_db_dir: "{{ role_zabbix_proxy_db_name | dirname }}"
+
+_zabbix_proxy_uses_sqlite: "{{ role_zabbix_proxy_db_backend == 'sqlite3' }}"
