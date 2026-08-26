@@ -78,7 +78,7 @@ role_zabbix_server_db_socket: ""
 # Sema se uvozi samo jednom, pri prvoj primeni role. Provera se radi
 # nad tabelom "dbversion" — ako postoji, uvoz se preskace.
 #
-role_zabbix_server_db_import: true
+role_zabbix_server_db_import: false
 
 # MySQL 8.0 sa ukljucenim binarnim logom odbija kreiranje funkcija
 # bez ove opcije. Rola je privremeno ukljucuje pre uvoza i vraca na
