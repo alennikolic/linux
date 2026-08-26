@@ -39,9 +39,11 @@ DenyKey={{ key }}
 {% endfor %}
 
 {{ '#' }} --- TLS --------------------------------------------------------
+{{ '#' }} TLSAccept sme sadrzati vise vrednosti razdvojenih zarezom, pa
+{{ '#' }} se PSK prisustvo proverava pripadnoscu a ne jednakoscu.
 TLSConnect={{ role_zabbix_agent_tls_connect }}
 TLSAccept={{ role_zabbix_agent_tls_accept }}
-{% if role_zabbix_agent_tls_connect == 'psk' or role_zabbix_agent_tls_accept == 'psk' %}
+{% if 'psk' in role_zabbix_agent_tls_connect or 'psk' in role_zabbix_agent_tls_accept %}
 TLSPSKIdentity={{ role_zabbix_agent_tls_psk_identity }}
 TLSPSKFile={{ role_zabbix_agent_tls_psk_file }}
 {% endif %}
