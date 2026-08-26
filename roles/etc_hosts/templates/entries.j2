@@ -1,0 +1,6 @@
+{{ '#' }} Unosi iz role_etc_hosts_entries.
+{% for _entry in role_etc_hosts_entries %}
+{% set _names = [_entry.hostnames] if _entry.hostnames is string else _entry.hostnames %}
+{{ "%-15s" | format(_entry.ip) }} {{ _names | join(' ') }}{% if _entry.comment | default('') | length > 0 %}    {{ '#' }} {{ _entry.comment }}{% endif %}
+
+{% endfor %}
