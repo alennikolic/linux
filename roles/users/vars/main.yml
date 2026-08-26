@@ -1,0 +1,23 @@
+---
+# roles/users/vars/main.yml
+#
+# Izvedene vrednosti. NE menjati kroz inventory.
+#
+# Prefiks donje crte oznacava da varijabla nije deo javnog interfejsa
+# role.
+
+_users_sudoers_dir: /etc/sudoers.d
+
+# Spisak zasticenih naloga prosiren nalogom pod kojim Ansible trenutno
+# radi. remote_user iz ansible.cfg, --user sa komandne linije i
+# ansible_user iz inventory-ja daju razlicite vrednosti, pa se uzimaju
+# sve tri.
+#
+# role_ansible_user_name dolazi iz role ansible_user; ako ta rola nije
+# u upotrebi, koristi se podrazumevano ime.
+_users_protected_all: >-
+  {{ (role_users_protected
+      + [ansible_user | default(''),
+         ansible_user_id | default(''),
+         role_ansible_user_name | default('ansible')])
+     | reject('equalto', '') | unique | list }}
