@@ -33,7 +33,7 @@ role_zabbix_agent_enabled: false
 # Ime paketa odredjuje i ime servisa, putanju konfiguracije i
 # include foldera — rola ih sama izvodi u vars/main.yml.
 #
-role_zabbix_agent_package: zabbix-agent
+role_zabbix_agent_package: zabbix-agent2
 
 # Zakovana verzija. Prazna vrednost instalira najnoviju dostupnu.
 #
