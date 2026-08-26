@@ -4,9 +4,10 @@
 #   1. Provere
 #   2. Instalacija paketa
 #   3. PHP podesavanja
-#   4. Vhost konfiguracija
-#   5. zabbix.conf.php — preskace carobnjak
-#   6. Servisi
+#   4. TLS materijal
+#   5. Vhost konfiguracija
+#   6. zabbix.conf.php — preskace carobnjak
+#   7. Servisi
 
 - name: "Instalacija i konfiguracija Zabbix frontenda"
   block:
@@ -24,50 +25,82 @@
           a ovaj host je {{ ansible_os_family | default('nepoznat') }}.
         success_msg: "Distribucija je podrzana."
 
-    - name: "Provera izbora web servera"
-      ansible.builtin.assert:
-        that:
-          - role_zabbix_web_server in ['nginx', 'apache']
-        fail_msg: >-
-          role_zabbix_web_server mora biti "nginx" ili "apache", a
-          zadato je "{{ role_zabbix_web_server }}".
-        success_msg: "Izbor web servera je ispravan."
-
     - name: "Provera da je lozinka baze zadata"
       ansible.builtin.assert:
         that:
           - role_zabbix_web_db_password is defined
           - role_zabbix_web_db_password | length > 0
         fail_msg: >-
-          role_zabbix_web_db_password nije popunjen. Mora biti ista
-          vrednost kao role_zabbix_db_password. Frontend cita bazu
-          direktno i bez lozinke ne moze da radi.
+          role_zabbix_web_db_password nije popunjen. Frontend cita
+          bazu direktno i bez lozinke ne moze da radi. Vrednost mora
+          odgovarati nalogu iz role zabbix_db — bilo nalogu servera,
+          bilo zasebnom nalogu frontenda.
         success_msg: "Lozinka baze je zadata."
+
+    # Isti port za HTTP i HTTPS znaci dva server bloka koja slusaju
+    # na istoj adresi; Nginx tada ne startuje.
+    - name: "Provera da se HTTP i HTTPS port razlikuju"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_web_listen_port | int != role_zabbix_web_https_port | int
+        fail_msg: >-
+          role_zabbix_web_listen_port i role_zabbix_web_https_port su
+          oba {{ role_zabbix_web_listen_port }}. Portovi se moraju
+          razlikovati.
+        success_msg: "Portovi se razlikuju."
+      when: role_zabbix_web_https_enabled | bool
+
+    # Ime hosta iz sertifikata mora odgovarati imenu kroz koje se
+    # frontend otvara. Sa "_" pretrazivac uvek prijavljuje neslaganje.
+    - name: "Upozorenje kada je HTTPS ukljucen bez imena hosta"
+      ansible.builtin.debug:
+        msg: >-
+          role_zabbix_web_hostname je "_", a HTTPS je ukljucen.
+          Konfiguracija ce raditi, ali ce pretrazivac prijaviti
+          neslaganje imena. Upisi stvarno ime iz sertifikata.
+      when:
+        - role_zabbix_web_https_enabled | bool
+        - role_zabbix_web_hostname == '_'
 
     # -----------------------------------------------------------------
     # 2. Instalacija
     # -----------------------------------------------------------------
 
-    - name: "Instalacija frontenda i konfiguracije web servera"
-      ansible.builtin.apt:
-        name: >-
-          {{ [_zabbix_web_frontend_package, _zabbix_web_conf_package]
-             | map('regex_replace', '$',
-                   '=' ~ role_zabbix_web_version
-                   if role_zabbix_web_version | length > 0 else '')
-             | list }}
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-      notify:
-        - "Restartuj web server"
-        - "Restartuj PHP-FPM"
+    - name: "Instalacija frontenda i Nginx konfiguracije"
+      block:
+
+        - name: "Instalacija paketa {{ _zabbix_web_frontend_package }} i {{ _zabbix_web_conf_package }}"
+          ansible.builtin.apt:
+            name: >-
+              {{ [_zabbix_web_frontend_package, _zabbix_web_conf_package]
+                 | map('regex_replace', '$',
+                       '=' ~ role_zabbix_web_version
+                       if role_zabbix_web_version | length > 0 else '')
+                 | list }}
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+          notify:
+            - "Restartuj web server"
+            - "Restartuj PHP-FPM"
+
+      rescue:
+
+        - name: "Objasnjenje neuspele instalacije"
+          ansible.builtin.fail:
+            msg: >-
+              Instalacija Zabbix frontenda nije uspela. Najcesci uzrok
+              je da Zabbix repozitorijum nije dodat — host mora biti i
+              u grupi [apply_repos], a apply_repos mora ici pre
+              deploy_zabbix_web u playbook.yml. Proveri sa:
+              apt-cache policy {{ _zabbix_web_frontend_package }}
 
     # -----------------------------------------------------------------
     # 3. PHP
     # -----------------------------------------------------------------
     # Verzija PHP-a se otkriva iz sistema, jer se razlikuje izmedju
-    # Ubuntu izdanja (8.1 na 22.04, 8.3 na 24.04).
+    # Ubuntu izdanja (8.1 na 22.04, 8.3 na 24.04). Zakovana putanja
+    # bi radila samo na jednom izdanju.
 
     - name: "Otkrivanje verzije PHP-a"
       ansible.builtin.shell:
@@ -82,47 +115,117 @@
         owner: root
         group: root
         mode: '0644'
-      when: _zabbix_web_php_fpm_needed | bool
+        backup: true
       notify: "Restartuj PHP-FPM"
 
-    - name: "Podesavanja PHP-a za Zabbix (Apache)"
-      ansible.builtin.template:
-        src: zabbix-php.ini.j2
-        dest: "/etc/php/{{ _php_version.stdout }}/apache2/conf.d/99-zabbix.ini"
-        owner: root
-        group: root
-        mode: '0644'
-      when: role_zabbix_web_server == 'apache'
-      failed_when: false
-      notify: "Restartuj web server"
-
     # -----------------------------------------------------------------
-    # 4. Vhost
+    # 4. TLS materijal
     # -----------------------------------------------------------------
-    # Paket zabbix-nginx-conf isporucuje /etc/zabbix/nginx.conf sa
-    # zakomentarisanim listen i server_name. Rola ga prepisuje.
+    # Fajlovi se upisuju samo kada je sadrzaj zadat. U suprotnom se
+    # pretpostavlja da vec postoje — postavila ih je rola "root_ca"
+    # ili su doneti rucno.
 
-    - name: "Vhost konfiguracija (Nginx)"
-      ansible.builtin.template:
-        src: nginx.conf.j2
-        dest: /etc/zabbix/nginx.conf
+    - name: "Upis TLS sertifikata"
+      ansible.builtin.copy:
+        content: "{{ role_zabbix_web_tls_cert_content }}"
+        dest: "{{ role_zabbix_web_tls_cert }}"
         owner: root
         group: root
         mode: '0644'
         backup: true
-      when: role_zabbix_web_server == 'nginx'
+      when:
+        - role_zabbix_web_https_enabled | bool
+        - role_zabbix_web_tls_cert_content | length > 0
       notify: "Restartuj web server"
 
-    - name: "Ukljucivanje Zabbix vhost-a (Apache)"
-      ansible.builtin.file:
-        src: /etc/zabbix/apache.conf
-        dest: /etc/apache2/conf-enabled/zabbix.conf
-        state: link
-      when: role_zabbix_web_server == 'apache'
+    # Privatni kljuc cita Nginx master proces, koji radi kao root.
+    # Sire dozvole nisu potrebne ni pozeljne.
+    - name: "Upis TLS privatnog kljuca"
+      ansible.builtin.copy:
+        content: "{{ role_zabbix_web_tls_key_content }}"
+        dest: "{{ role_zabbix_web_tls_key }}"
+        owner: root
+        group: root
+        mode: '0600'
+        backup: true
+      no_log: true
+      when:
+        - role_zabbix_web_https_enabled | bool
+        - role_zabbix_web_tls_key_content | length > 0
       notify: "Restartuj web server"
+
+    # Provera ide POSLE eventualnog upisa, da pokrije oba nacina.
+    # Bez nje bi Nginx pukao pri restartu, sa greskom koja ne kaze
+    # jasno da fajl ne postoji.
+    - name: "Provera da TLS fajlovi postoje"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ role_zabbix_web_tls_cert }}"
+        - "{{ role_zabbix_web_tls_key }}"
+      register: _tls_files
+      when: role_zabbix_web_https_enabled | bool
+
+    - name: "Potvrda da TLS materijal postoji"
+      ansible.builtin.assert:
+        that:
+          - _tls_files.results | selectattr('stat.exists', 'equalto', false) | list | length == 0
+        fail_msg: >-
+          HTTPS je ukljucen, ali nedostaje sertifikat ili privatni
+          kljuc. Ocekivano:
+          {{ role_zabbix_web_tls_cert }} i {{ role_zabbix_web_tls_key }}.
+          Ili donesi fajlove na host, ili zadaj njihov sadrzaj kroz
+          role_zabbix_web_tls_cert_content i
+          role_zabbix_web_tls_key_content.
+        success_msg: "TLS materijal je na mestu."
+      when: role_zabbix_web_https_enabled | bool
 
     # -----------------------------------------------------------------
-    # 5. Konfiguracija frontenda
+    # 5. Vhost
+    # -----------------------------------------------------------------
+    # Paket zabbix-nginx-conf isporucuje vhost sa zakomentarisanim
+    # listen i server_name — bez izmene ne radi. Rola upisuje
+    # sopstvenu verziju u celosti.
+
+    # Sintaksa za HTTP/2 se menjala: do 1.25.0 ide kao parametar
+    # direktive listen, od 1.25.1 kao zasebna direktiva "http2 on".
+    # Stara sintaksa na novom Nginx-u ispisuje upozorenje, nova na
+    # starom prekida rad — zato se verzija otkriva.
+    #
+    # "nginx -v" pise na standardni izlaz za greske, otuda 2>&1.
+    - name: "Otkrivanje verzije Nginx-a"
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          nginx -v 2>&1 | sed -E 's#^nginx version: nginx/([0-9.]+).*#\1#'
+        executable: /bin/bash
+      register: _nginx_version
+      changed_when: false
+
+    - name: "Izbor sintakse za HTTP/2"
+      ansible.builtin.set_fact:
+        _zabbix_web_http2_new_syntax: >-
+          {{ _nginx_version.stdout is version('1.25.1', '>=') }}
+
+    - name: "Vhost konfiguracija"
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: "{{ _zabbix_web_vhost_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      notify: "Restartuj web server"
+
+    # Provera cele Nginx konfiguracije pre restarta. Bez nje bi
+    # greska u vhost-u oborila web server koji do tada radi.
+    - name: "Provera Nginx konfiguracije"
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+    # -----------------------------------------------------------------
+    # 6. Konfiguracija frontenda
     # -----------------------------------------------------------------
     # Upis ovog fajla preskace carobnjak za instalaciju koji se inace
     # pojavljuje pri prvom otvaranju frontenda.
@@ -147,7 +250,7 @@
       notify: "Restartuj PHP-FPM"
 
     # -----------------------------------------------------------------
-    # 6. Servisi
+    # 7. Servisi
     # -----------------------------------------------------------------
 
     - name: "Servis PHP-FPM"
@@ -155,7 +258,6 @@
         name: "php{{ _php_version.stdout }}-fpm"
         enabled: true
         state: started
-      when: _zabbix_web_php_fpm_needed | bool
 
     - name: "Servis {{ _zabbix_web_service }}"
       ansible.builtin.service:
