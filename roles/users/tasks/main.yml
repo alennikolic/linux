@@ -1,0 +1,292 @@
+---
+# roles/users/tasks/main.yml
+#
+# Tok:
+#   1. Provere (assert)
+#   2. Grupe — pre naloga, jer nalog ne moze uci u nepostojecu grupu
+#   3. Nalozi (state: present)
+#   4. Kucni folder — dozvole, opciono
+#   5. SSH kljucevi
+#   6. Sudo pravila
+#   7. Brisanje naloga (state: absent)
+
+- name: "Upravljanje korisnickim nalozima"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je lista naloga lista"
+      ansible.builtin.assert:
+        that:
+          - role_users_list is sequence
+          - role_users_list is not string
+        fail_msg: >-
+          role_users_list mora biti lista mapa, a ne
+          '{{ role_users_list | type_debug }}'. Vidi primer u
+          roles/users/defaults/main.yml.
+        success_msg: "Zadato naloga: {{ role_users_list | length }}"
+
+    - name: "Provera strukture pojedinacnih naloga"
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - item.name | length > 0
+          - item.state | default('present') in ['present', 'absent']
+        fail_msg: >-
+          Nalog u role_users_list nema popunjeno name, ili state ima
+          vrednost izvan present/absent. Sporan unos: {{ item }}
+        success_msg: "Unos ispravan."
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name | default('bez imena') }}"
+
+    - name: "Provera da se isto ime ne pojavljuje dva puta"
+      vars:
+        _users_names: "{{ role_users_list | map(attribute='name') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _users_names | length == _users_names | unique | length
+        fail_msg: >-
+          Isti nalog je naveden vise puta u role_users_list. Poslednji
+          unos bi nadjacao prethodne, sto je gotovo uvek greska.
+          Ponovljeno: {{ _users_names | difference(_users_names | unique) | unique | join(', ') }}
+        success_msg: "Nema ponovljenih naloga."
+      when: role_users_list | length > 0
+
+    # Cist tekst u polju password useradd upisuje doslovno u
+    # /etc/shadow. Nalog tada postaje trajno nedostupan, a nijedna
+    # komanda to ne prijavljuje kao gresku.
+    - name: "Provera da je lozinka zadata kao hes"
+      ansible.builtin.assert:
+        that:
+          - item.password is match('^\$')
+        fail_msg: >-
+          Nalog '{{ item.name }}' ima lozinku koja ne lici na hes.
+          Vrednost mora pocinjati znakom dolara. Hes napravi sa:
+          mkpasswd --method=yescrypt   ili   openssl passwd -6
+          Cist tekst bi bio upisan doslovno i nalog bi ostao
+          nedostupan.
+        success_msg: "Lozinka naloga '{{ item.name }}' je hes."
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.password is defined
+      no_log: true
+
+    # Brisanje naloga pod kojim Ansible radi prekinulo bi vezu usred
+    # pokretanja i ostavilo host nedostupnim.
+    - name: "Provera da se ne brise zasticen nalog"
+      ansible.builtin.assert:
+        that:
+          - item.name not in _users_protected_all
+        fail_msg: >-
+          Nalog '{{ item.name }}' je oznacen sa state: absent, ali je
+          na spisku zasticenih ({{ _users_protected_all | join(', ') }}).
+          Ako je to zaista namera, ukloni ga iz role_users_protected —
+          ali imaj u vidu da brisanje naloga pod kojim Ansible radi
+          prekida vezu i ostavlja host nedostupnim.
+        success_msg: "Nalog '{{ item.name }}' nije zasticen."
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.state | default('present') == 'absent'
+
+    - name: "Provera sudo pravila"
+      ansible.builtin.assert:
+        that:
+          - item.sudo is boolean or (item.sudo | string | length > 0)
+        fail_msg: >-
+          Polje sudo naloga '{{ item.name }}' mora biti true/false ili
+          neprazan string sa spiskom dozvoljenih komandi. Prazan string
+          bi dao pravilo koje ne dozvoljava nista, a fajl u sudoers.d
+          bi ostao.
+        success_msg: "Sudo pravilo naloga '{{ item.name }}' je ispravno."
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.sudo is defined
+
+    - name: "Provera strukture grupa"
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - item.name | length > 0
+        fail_msg: >-
+          Grupa u role_users_groups nema popunjeno name.
+          Sporan unos: {{ item }}
+        success_msg: "Grupa ispravna."
+      loop: "{{ role_users_groups }}"
+      loop_control:
+        label: "{{ item.name | default('bez imena') }}"
+
+    # -----------------------------------------------------------------
+    # 2. Grupe
+    # -----------------------------------------------------------------
+    # Idu pre naloga: nalog koji navodi nepostojecu grupu pada sa
+    # porukom koja ne govori jasno u cemu je problem.
+
+    - name: "Kreiranje grupa"
+      ansible.builtin.group:
+        name: "{{ item.name }}"
+        gid: "{{ item.gid | default(omit) }}"
+        system: "{{ item.system | default(false) }}"
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ role_users_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # -----------------------------------------------------------------
+    # 3. Nalozi
+    # -----------------------------------------------------------------
+    # no_log se ukljucuje samo kada nalog zaista ima lozinku. Trajno
+    # ukljucen no_log sakrio bi i obicne izmene, pa bi --diff izgubio
+    # smisao.
+
+    - name: "Kreiranje i azuriranje naloga"
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        comment: "{{ item.comment | default(omit) }}"
+        uid: "{{ item.uid | default(omit) }}"
+        shell: "{{ item.shell | default(role_users_default_shell) }}"
+        home: "{{ item.home | default(omit, true) }}"
+        create_home: "{{ item.create_home | default(role_users_create_home) }}"
+        system: "{{ item.system | default(false) }}"
+        groups: >-
+          {{ ((item.groups | default([])) + role_users_default_groups)
+             | unique | join(',') | default(omit, true) }}
+        append: "{{ item.append | default(role_users_append_groups) }}"
+        password: "{{ item.password | default(omit) }}"
+        update_password: "{{ role_users_update_password }}"
+        password_lock: "{{ item.password_lock | default(omit) }}"
+        state: present
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.state | default('present') == 'present'
+      no_log: "{{ item.password is defined }}"
+
+    # -----------------------------------------------------------------
+    # 4. Kucni folder
+    # -----------------------------------------------------------------
+    # Ubuntu kreira kucne foldere sa 0755, sto znaci da svaki nalog na
+    # masini moze da cita tudje. Task je opcion — prazna vrednost
+    # role_users_home_mode znaci "ne diraj".
+
+    - name: "Dozvole nad kucnim folderom"
+      ansible.builtin.file:
+        path: "{{ item.home | default('/home/' ~ item.name) }}"
+        state: directory
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: "{{ role_users_home_mode }}"
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.state | default('present') == 'present'
+        - item.create_home | default(role_users_create_home) | bool
+        - role_users_home_mode | length > 0
+
+    # -----------------------------------------------------------------
+    # 5. SSH kljucevi
+    # -----------------------------------------------------------------
+    # subelements razvija listu naloga u parove (nalog, kljuc).
+    # skip_missing preskace naloge bez polja ssh_keys.
+    #
+    # item.0 je nalog, item.1 je pojedinacan kljuc.
+
+    - name: "Postavljanje SSH kljuceva"
+      ansible.posix.authorized_key:
+        user: "{{ item.0.name }}"
+        key: "{{ item.1 }}"
+        exclusive: false
+        state: present
+      loop: "{{ role_users_list | subelements('ssh_keys', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.name }}"
+      when:
+        - item.0.state | default('present') == 'present'
+        - not (item.0.ssh_key_exclusive | default(role_users_ssh_key_exclusive) | bool)
+
+    # Kada je exclusive ukljucen, kljucevi se ne mogu upisivati jedan
+    # po jedan — svaki naredni bi obrisao prethodni. Zato se cela lista
+    # salje odjednom, spojena prelomima reda.
+    - name: "Postavljanje SSH kljuceva (iskljucivo)"
+      ansible.posix.authorized_key:
+        user: "{{ item.name }}"
+        key: "{{ item.ssh_keys | join('\n') }}"
+        exclusive: true
+        state: present
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.state | default('present') == 'present'
+        - item.ssh_keys | default([]) | length > 0
+        - item.ssh_key_exclusive | default(role_users_ssh_key_exclusive) | bool
+
+    # -----------------------------------------------------------------
+    # 6. Sudo
+    # -----------------------------------------------------------------
+    # validate garantuje da neispravno pravilo nikada ne stigne na
+    # disk — visudo proverava sintaksu pre upisa. Neispravan fajl u
+    # /etc/sudoers.d/ moze onesposobiti sudo na celom sistemu.
+
+    - name: "Sudo pravila"
+      ansible.builtin.template:
+        src: sudoers.j2
+        dest: >-
+          {{ _users_sudoers_dir }}/{{ role_users_sudo_file_prefix }}{{ item.name | regex_replace('[^A-Za-z0-9_-]', '_') }}
+        owner: root
+        group: root
+        mode: '0440'
+        validate: 'visudo -cf %s'
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - role_users_sudo_enabled | bool
+        - item.state | default('present') == 'present'
+        - item.sudo is defined
+        - item.sudo | bool or item.sudo is string
+
+    # Nalog kojem je sudo ukinut ili koji se brise ne sme ostati sa
+    # pravilom na disku. Task dira iskljucivo fajlove koje je rola
+    # sama napravila — naloge van role_users_list ne poznaje.
+    - name: "Uklanjanje sudo pravila"
+      ansible.builtin.file:
+        path: >-
+          {{ _users_sudoers_dir }}/{{ role_users_sudo_file_prefix }}{{ item.name | regex_replace('[^A-Za-z0-9_-]', '_') }}
+        state: absent
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - role_users_sudo_enabled | bool
+        - item.state | default('present') == 'absent'
+          or item.sudo is not defined
+          or not (item.sudo | bool or item.sudo is string)
+
+    # -----------------------------------------------------------------
+    # 7. Brisanje naloga
+    # -----------------------------------------------------------------
+    # Ide poslednje, posle uklanjanja sudo pravila — obrnut redosled bi
+    # ostavio pravilo za nalog koji vise ne postoji.
+    #
+    # force: true prekida sesije naloga; bez toga userdel odbija da
+    # obrise nalog koji ima pokrenut proces.
+
+    - name: "Brisanje naloga"
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        state: absent
+        remove: "{{ role_users_remove_home | bool }}"
+        force: true
+      loop: "{{ role_users_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.state | default('present') == 'absent'
+
+  when: role_users_enabled | default(false) | bool
