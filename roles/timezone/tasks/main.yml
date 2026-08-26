@@ -1,0 +1,213 @@
+---
+# roles/timezone/tasks/main.yml
+#
+# Tok:
+#   1. Provere (assert)
+#   2. Postavljanje vremenske zone
+#   3. Restart servisa koji kesiraju TZ, samo ako je zona promenjena
+#   4. Sinhronizacija vremena (opciono)
+
+- name: "Vremenska zona i sinhronizacija vremena"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera da je vremenska zona zadata"
+      ansible.builtin.assert:
+        that:
+          - role_timezone_name is defined
+          - role_timezone_name | length > 0
+        fail_msg: >-
+          role_timezone_name nije popunjen. Zadaj ga u
+          group_vars/all.yml, na primer: role_timezone_name:
+          Europe/Belgrade. Spisak dostupnih zona: timedatectl
+          list-timezones
+        success_msg: "Zadata zona: {{ role_timezone_name }}"
+
+    - name: "Provera izbora NTP servisa"
+      ansible.builtin.assert:
+        that:
+          - role_timezone_ntp_service in ['systemd-timesyncd', 'chrony']
+        fail_msg: >-
+          role_timezone_ntp_service ima nedozvoljenu vrednost
+          '{{ role_timezone_ntp_service }}'. Dozvoljeno je
+          systemd-timesyncd ili chrony.
+        success_msg: "NTP servis: {{ role_timezone_ntp_service }}"
+
+    - name: "Provera tipa chrony izvora"
+      ansible.builtin.assert:
+        that:
+          - role_timezone_chrony_source_type in ['server', 'pool', 'peer']
+        fail_msg: >-
+          role_timezone_chrony_source_type mora biti server, pool ili
+          peer, a zadato je '{{ role_timezone_chrony_source_type }}'.
+        success_msg: "Tip izvora: {{ role_timezone_chrony_source_type }}"
+      when:
+        - role_timezone_ntp_enabled | bool
+        - role_timezone_ntp_service == 'chrony'
+
+    # Bolje pasti ovde, sa jasnom porukom, nego upisati konfiguraciju
+    # bez ijednog izvora i ostaviti host da tiho ne sinhronizuje vreme.
+    - name: "Provera da je lista NTP servera popunjena"
+      ansible.builtin.assert:
+        that:
+          - role_timezone_ntp_servers | length > 0
+        fail_msg: >-
+          role_timezone_ntp_enabled je ukljucen, ali je lista
+          role_timezone_ntp_servers prazna. Upisi bar jedan izvor u
+          group_vars/all.yml ili iskljuci sinhronizaciju.
+        success_msg: >-
+          Zadato izvora: {{ role_timezone_ntp_servers | length }}
+      when: role_timezone_ntp_enabled | bool
+
+    # Putanje konfiguracije se razlikuju po familiji distribucija, a
+    # rola pokriva samo Debian/Ubuntu. Sama zona radi svuda, pa se
+    # provera odnosi iskljucivo na NTP deo.
+    - name: "Provera podrzane distribucije za NTP deo"
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family | default('') == 'Debian'
+        fail_msg: >-
+          Konfiguraciju sinhronizacije vremena ova rola podrzava samo
+          na Debian/Ubuntu sistemima, a detektovano je
+          '{{ ansible_os_family | default("nepoznato") }}'. Postavi
+          role_timezone_ntp_enabled: false u host_vars za ovaj host —
+          vremenska zona ce se i dalje postaviti.
+        success_msg: "Distribucija podrzana."
+      when: role_timezone_ntp_enabled | bool
+
+    # Provera da zona uopste postoji. timedatectl bi u suprotnom
+    # prijavio gresku bez naznake koja je vrednost pogresna.
+    - name: "Provera da zona postoji u /usr/share/zoneinfo"
+      ansible.builtin.stat:
+        path: "/usr/share/zoneinfo/{{ role_timezone_name }}"
+      register: _timezone_zoneinfo
+      changed_when: false
+
+    - name: "Potvrda da je zona poznata sistemu"
+      ansible.builtin.assert:
+        that:
+          - _timezone_zoneinfo.stat.exists
+        fail_msg: >-
+          Zona '{{ role_timezone_name }}' ne postoji u
+          /usr/share/zoneinfo na ovom hostu. Proveri kucanje —
+          imena razlikuju velika i mala slova (Europe/Belgrade, ne
+          europe/belgrade). Spisak: timedatectl list-timezones
+        success_msg: "Zona postoji u bazi."
+
+    # -----------------------------------------------------------------
+    # 2. Vremenska zona
+    # -----------------------------------------------------------------
+    # Modul je idempotentan: poredi trenutnu zonu i menja je samo ako
+    # se razlikuje.
+
+    - name: "Postavljanje vremenske zone na {{ role_timezone_name }}"
+      community.general.timezone:
+        name: "{{ role_timezone_name }}"
+        hwclock: "{{ role_timezone_hwclock | default(omit, true) }}"
+      register: _timezone_set
+
+    # -----------------------------------------------------------------
+    # 3. Servisi koji kesiraju TZ
+    # -----------------------------------------------------------------
+    # Uslov "is changed" je bitan — bez njega bi svako pokretanje role
+    # restartovalo cron i rsyslog bez potrebe.
+
+    - name: "Restart servisa posle promene zone"
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: restarted
+      loop: "{{ role_timezone_restart_services }}"
+      when:
+        - _timezone_set is changed
+        - role_timezone_restart_services | length > 0
+
+    # -----------------------------------------------------------------
+    # 4. Sinhronizacija vremena
+    # -----------------------------------------------------------------
+
+    - name: "Konfiguracija sinhronizacije vremena"
+      block:
+
+        - name: "Instalacija paketa {{ _timezone_ntp.package }}"
+          ansible.builtin.apt:
+            name: "{{ _timezone_ntp.package }}"
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+
+        # chrony podrzava conf.d tek od verzije 4.0. Na starijim
+        # sistemima (Ubuntu 20.04, chrony 3.5) drop-in bi bio upisan
+        # ali nikada procitan — host bi tiho ostao na starim izvorima.
+        - name: "Provera da chrony ucitava /etc/chrony/conf.d"
+          ansible.builtin.command:
+            cmd: >-
+              grep -qsE '^[[:space:]]*(confdir|include)[[:space:]]+/etc/chrony/conf\.d'
+              /etc/chrony/chrony.conf
+          register: _timezone_chrony_confdir
+          changed_when: false
+          failed_when: false
+          check_mode: false
+          when: role_timezone_ntp_service == 'chrony'
+
+        # U --check rezimu paket mozda nije ni instaliran, pa osnovnog
+        # fajla nema i provera bi lazno pala. Zato se assert preskace.
+        - name: "Potvrda da chrony podrzava drop-in konfiguraciju"
+          ansible.builtin.assert:
+            that:
+              - _timezone_chrony_confdir.rc == 0
+            fail_msg: >-
+              /etc/chrony/chrony.conf ne ucitava /etc/chrony/conf.d.
+              Verzija chrony-ja je verovatno starija od 4.0. Dodaj
+              rucno liniju "confdir /etc/chrony/conf.d" u osnovni
+              fajl, ili koristi
+              role_timezone_ntp_service: systemd-timesyncd
+            success_msg: "chrony ucitava conf.d."
+          when:
+            - role_timezone_ntp_service == 'chrony'
+            - not ansible_check_mode
+
+        - name: "Folder {{ _timezone_ntp.dropin_dir }} postoji"
+          ansible.builtin.file:
+            path: "{{ _timezone_ntp.dropin_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: "Upis konfiguracije u {{ _timezone_ntp.dropin_file }}"
+          ansible.builtin.template:
+            src: "{{ _timezone_ntp.template }}"
+            dest: "{{ _timezone_ntp.dropin_file }}"
+            owner: root
+            group: root
+            mode: '0644'
+            backup: true
+          notify: "restart servisa za sinhronizaciju vremena"
+
+        # Drop-in samo DODAJE izvore. Ako host ne sme da koristi javni
+        # pool iz osnovnog fajla, linije se ovde gase — uz backup.
+        # Regularni izraz namerno ne hvata vec zakomentarisane linije,
+        # pa je task idempotentan.
+        - name: "Gasenje podrazumevanih pool izvora u chrony.conf"
+          ansible.builtin.replace:
+            path: /etc/chrony/chrony.conf
+            regexp: '^([[:space:]]*pool[[:space:]]+.*)$'
+            replace: '# \1    # iskljucila Ansible rola: timezone'
+            backup: true
+          notify: "restart servisa za sinhronizaciju vremena"
+          when:
+            - role_timezone_ntp_service == 'chrony'
+            - role_timezone_chrony_disable_default_pools | bool
+
+        - name: "Servis {{ _timezone_ntp.service }} pokrenut i ukljucen"
+          ansible.builtin.service:
+            name: "{{ _timezone_ntp.service }}"
+            state: started
+            enabled: true
+
+      when: role_timezone_ntp_enabled | bool
+
+  when: role_timezone_enabled | default(false) | bool
