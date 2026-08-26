@@ -1,0 +1,19 @@
+{{ '#' }} /etc/chrony/conf.d/99-ansible.conf
+{{ '#' }}
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: timezone
+{{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+{{ '#' }}
+{{ '#' }} Drop-in fajl, ucitava se iz /etc/chrony/chrony.conf preko
+{{ '#' }} direktive "confdir". Izvori ispod se DODAJU na one iz
+{{ '#' }} osnovnog fajla — vidi role_timezone_chrony_disable_default_pools.
+{{ '#' }}
+{{ '#' }} Provera stanja:  chronyc sources -v
+
+{% for _source in role_timezone_ntp_servers %}
+{{ role_timezone_chrony_source_type }} {{ _source }}{{ ' iburst' if role_timezone_chrony_iburst | bool else '' }}
+{% endfor %}
+{% if role_timezone_chrony_makestep | length > 0 %}
+
+{{ '#' }} Skokovit ispravak vremena u prvim merenjima posle pokretanja.
+makestep {{ role_timezone_chrony_makestep }}
+{% endif %}
