@@ -1,0 +1,200 @@
+---
+# roles/etc_hosts/tasks/main.yml
+#
+# Tok:
+#   1. Provere (assert)
+#   2. cloud-init — detekcija i opciono iskljucivanje
+#   3. Upis: blok ili ceo fajl, prema role_etc_hosts_manage_mode
+
+- name: "Upravljanje /etc/hosts"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provere
+    # -----------------------------------------------------------------
+
+    - name: "Provera rezima rada"
+      ansible.builtin.assert:
+        that:
+          - role_etc_hosts_manage_mode in ['block', 'file']
+        fail_msg: >-
+          role_etc_hosts_manage_mode ima nedozvoljenu vrednost
+          '{{ role_etc_hosts_manage_mode }}'. Dozvoljeno je block
+          (aditivno, podrazumevano) ili file (ceo fajl iz sablona).
+        success_msg: "Rezim: {{ role_etc_hosts_manage_mode }}"
+
+    - name: "Provera da je lista unosa lista"
+      ansible.builtin.assert:
+        that:
+          - role_etc_hosts_entries is sequence
+          - role_etc_hosts_entries is not string
+        fail_msg: >-
+          role_etc_hosts_entries mora biti lista mapa, a ne
+          '{{ role_etc_hosts_entries | type_debug }}'. Vidi primer u
+          roles/etc_hosts/defaults/main.yml.
+        success_msg: >-
+          Zadato unosa: {{ role_etc_hosts_entries | length }}
+
+    # Nedostajuci kljuc bi se inace ispoljio kao nejasna Jinja greska
+    # tek pri renderovanju sablona.
+    - name: "Provera strukture pojedinacnih unosa"
+      ansible.builtin.assert:
+        that:
+          - item.ip is defined
+          - item.ip | string | length > 0
+          - item.hostnames is defined
+          - item.hostnames | length > 0
+        fail_msg: >-
+          Unos u role_etc_hosts_entries nema popunjeno ip ili
+          hostnames. Oba su obavezna. Sporni unos: {{ item }}
+        success_msg: "Unos ispravan."
+      loop: "{{ role_etc_hosts_entries }}"
+      loop_control:
+        label: "{{ item.ip | default('bez ip') }}"
+
+    # Isto ime na dve razlicite adrese u istom fajlu je tiha greska —
+    # razresavanje uzima prvi pogodak, pa se ponasanje menja u
+    # zavisnosti od redosleda u listi.
+    - name: "Provera da se isto ime ne pojavljuje u vise unosa"
+      vars:
+        _etc_hosts_names: >-
+          {{ role_etc_hosts_entries | map(attribute='hostnames') | flatten }}
+      ansible.builtin.assert:
+        that:
+          - _etc_hosts_names | length == _etc_hosts_names | unique | length
+        fail_msg: >-
+          Isto ime se pojavljuje u vise unosa. Razresavanje bi uzelo
+          prvi pogodak, pa rezultat zavisi od redosleda u listi.
+          Ponovljena imena:
+          {{ _etc_hosts_names | difference(_etc_hosts_names | unique) | unique | join(', ') }}
+        success_msg: "Nema ponovljenih imena."
+      when: role_etc_hosts_entries | length > 0
+
+    # Poslednja brana pre prepisivanja celog fajla. Bez 127.0.0.1
+    # sistem ostaje bez razresavanja localhost-a.
+    - name: "Provera da lokalne linije sadrze 127.0.0.1"
+      ansible.builtin.assert:
+        that:
+          - role_etc_hosts_localhost_lines | length > 0
+          - role_etc_hosts_localhost_lines | join(' ') is search('127\.0\.0\.1')
+        fail_msg: >-
+          U rezimu file rola upisuje ceo /etc/hosts, a
+          role_etc_hosts_localhost_lines ne sadrzi 127.0.0.1. Takav
+          fajl bi onesposobio razresavanje localhost-a. Dopuni listu
+          ili predji na role_etc_hosts_manage_mode: block
+        success_msg: "Lokalne linije sadrze 127.0.0.1."
+      when: role_etc_hosts_manage_mode == 'file'
+
+    - name: "Provera da fajl {{ role_etc_hosts_path }} postoji"
+      ansible.builtin.stat:
+        path: "{{ role_etc_hosts_path }}"
+      register: _etc_hosts_stat
+      changed_when: false
+
+    - name: "Potvrda da fajl postoji"
+      ansible.builtin.assert:
+        that:
+          - _etc_hosts_stat.stat.exists
+        fail_msg: >-
+          {{ role_etc_hosts_path }} ne postoji na ovom hostu. Rola
+          namerno ne kreira fajl od nule — odsustvo /etc/hosts je znak
+          da nesto nije u redu sa sistemom.
+        success_msg: "Fajl postoji."
+      when: role_etc_hosts_manage_mode == 'block'
+
+    # -----------------------------------------------------------------
+    # 2. cloud-init
+    # -----------------------------------------------------------------
+    # Konfiguracija se spaja iz cloud.cfg i svih fajlova u cloud.cfg.d,
+    # pa se pretraga radi nad oba puta. Vrednosti true, template i
+    # localhost sve znace da cloud-init dira /etc/hosts pri podizanju.
+
+    - name: "Detekcija cloud-init upravljanja nad /etc/hosts"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -rEls
+          - '^[[:space:]]*manage_etc_hosts:[[:space:]]*(true|template|localhost)'
+          - /etc/cloud/cloud.cfg
+          - /etc/cloud/cloud.cfg.d
+      register: _etc_hosts_cloud_init
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: role_etc_hosts_cloud_init_check | bool
+
+    # Namerno upozorenje, a ne prekid. Rola i dalje uredno upise svoje
+    # izmene — one samo nece prezivati restart dok se ovo ne resi.
+    - name: "UPOZORENJE: cloud-init regenerise /etc/hosts pri podizanju"
+      ansible.builtin.debug:
+        msg: >-
+          cloud-init ima manage_etc_hosts ukljucen
+          ({{ _etc_hosts_cloud_init.stdout_lines | join(', ') }}).
+          Izmene koje ova rola upise nestace posle sledeceg restarta.
+          Postavi role_etc_hosts_cloud_init_disable: true, ili gasi
+          cloud-init upravljanje rucno.
+      when:
+        - role_etc_hosts_cloud_init_check | bool
+        - not role_etc_hosts_cloud_init_disable | bool
+        - _etc_hosts_cloud_init.rc | default(1) == 0
+
+    # Fajlovi u cloud.cfg.d se spajaju leksickim redosledom, pa prefiks
+    # 99- garantuje da ova vrednost nadjacava sve prethodne.
+    - name: "Iskljucivanje cloud-init upravljanja nad /etc/hosts"
+      ansible.builtin.copy:
+        content: |
+          {{ '#' }} {{ role_etc_hosts_cloud_init_file }}
+          {{ '#' }}
+          {{ '#' }} UPRAVLJA ANSIBLE ROLA: etc_hosts
+          {{ '#' }} Rucne izmene bice prepisane.
+          {{ '#' }}
+          {{ '#' }} Bez ovog fajla cloud-init regenerise /etc/hosts pri
+          {{ '#' }} svakom podizanju sistema i brise sve sto je Ansible
+          {{ '#' }} upisao. Vazi od sledeceg podizanja.
+          manage_etc_hosts: false
+        dest: "{{ role_etc_hosts_cloud_init_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      when: role_etc_hosts_cloud_init_disable | bool
+
+    # -----------------------------------------------------------------
+    # 3a. Rezim "block"
+    # -----------------------------------------------------------------
+    # Prazna lista unosa znaci uklanjanje bloka. Alternativa bi bila
+    # upis praznog bloka sa dva markera i nicim izmedju, sto nikome
+    # ne koristi.
+
+    - name: "Upis bloka u {{ role_etc_hosts_path }}"
+      ansible.builtin.blockinfile:
+        path: "{{ role_etc_hosts_path }}"
+        block: "{{ lookup('ansible.builtin.template', 'entries.j2') | trim }}"
+        marker: "# {mark} {{ role_etc_hosts_block_marker }}"
+        insertafter: "{{ role_etc_hosts_block_insertafter }}"
+        state: >-
+          {{ role_etc_hosts_block_state
+             if role_etc_hosts_entries | length > 0
+             else 'absent' }}
+        owner: "{{ role_etc_hosts_owner }}"
+        group: "{{ role_etc_hosts_group }}"
+        mode: "{{ role_etc_hosts_mode }}"
+        backup: "{{ role_etc_hosts_backup | bool }}"
+        create: false
+      when: role_etc_hosts_manage_mode == 'block'
+
+    # -----------------------------------------------------------------
+    # 3b. Rezim "file"
+    # -----------------------------------------------------------------
+
+    - name: "Upis celog {{ role_etc_hosts_path }} iz sablona"
+      ansible.builtin.template:
+        src: hosts.j2
+        dest: "{{ role_etc_hosts_path }}"
+        owner: "{{ role_etc_hosts_owner }}"
+        group: "{{ role_etc_hosts_group }}"
+        mode: "{{ role_etc_hosts_mode }}"
+        backup: "{{ role_etc_hosts_backup | bool }}"
+      when: role_etc_hosts_manage_mode == 'file'
+
+  when: role_etc_hosts_enabled | default(false) | bool
