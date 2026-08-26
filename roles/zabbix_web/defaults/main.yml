@@ -1,7 +1,8 @@
 ---
 # roles/zabbix_web/defaults/main.yml
 #
-# Rola "zabbix_web" instalira i konfigurise Zabbix web frontend.
+# Rola "zabbix_web" instalira i konfigurise Zabbix web frontend na
+# Nginx-u.
 #
 # Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_web],
 # koja kroz group_vars/deploy_zabbix_web.yml postavlja
@@ -9,7 +10,7 @@
 #
 # PREDUSLOVI:
 #   1. Zabbix repozitorijum — rola "repos", grupa [apply_repos]
-#   2. Baza sa uvezenom semom — role "zabbix_db" i "zabbix_server"
+#   2. Baza sa uvezenom semom — rola "zabbix_db"
 #
 # Frontend NE mora biti na istom hostu kao Zabbix server, ali mora
 # imati mrezni pristup do BAZE. Frontend cita bazu direktno, ne kroz
@@ -17,6 +18,8 @@
 #
 # Rola upisuje zabbix.conf.php i time preskace carobnjak za
 # instalaciju koji se inace pojavljuje pri prvom otvaranju frontenda.
+#
+# APACHE VISE NIJE PODRZAN. Rola radi iskljucivo sa Nginx-om.
 
 
 # =====================================================================
@@ -25,19 +28,11 @@
 
 role_zabbix_web_enabled: false
 
-
-# =====================================================================
-# WEB SERVER
-# =====================================================================
-# nginx  — podrazumevano
-# apache — Apache 2.4
-#
-# Izbor odredjuje ime konfiguracionog paketa, servisa i putanju
-# konfiguracije. Rola ih sama izvodi.
-#
-role_zabbix_web_server: nginx
-
 # Zakovana verzija Zabbix paketa. Prazna vrednost instalira najnoviju.
+#
+# Ako je zakovana na hostu servera kroz role_zabbix_server_version,
+# zakuj i ovde na istu vrednost.
+#
 role_zabbix_web_version: ""
 
 
@@ -54,18 +49,23 @@ role_zabbix_web_db_user: zabbix
 
 # OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
 #
-# Mora biti ISTA kao role_zabbix_db_password. Najlakse je definisati
-# je jednom, u host_vars:
+# Ako rola zabbix_db ima ukljucen zaseban nalog za frontend
+# (role_zabbix_db_frontend_enabled), ovde ide TAJ nalog i NJEGOVA
+# lozinka — role_zabbix_db_frontend_user i
+# role_zabbix_db_frontend_password. U suprotnom ide nalog servera.
 #
-#   _zabbix_db_pass: !vault | ...
-#   role_zabbix_db_password: "{{ _zabbix_db_pass }}"
-#   role_zabbix_server_db_password: "{{ _zabbix_db_pass }}"
-#   role_zabbix_web_db_password: "{{ _zabbix_db_pass }}"
+#   host_vars/srv-web-01.yml
+#     role_zabbix_web_db_user: "zabbix_web"
+#     role_zabbix_web_db_password: "druga-lozinka"
 #
 role_zabbix_web_db_password: ""
 
-# mysql — MySQL, MariaDB (podrazumevano)
+# mysql — MySQL (podrazumevano)
 # pgsql — PostgreSQL
+#
+# Odredjuje samo vrednost $DB['TYPE'] u zabbix.conf.php. Rola
+# "zabbix_db" pokriva iskljucivo MySQL.
+#
 role_zabbix_web_db_backend: mysql
 
 
@@ -87,12 +87,19 @@ role_zabbix_web_server_name: ""
 
 
 # =====================================================================
-# WEB SERVER — MREZA
+# MREZA
 # =====================================================================
-
+# Port za obican HTTP.
+#
+# Kada je HTTPS ukljucen a role_zabbix_web_http_redirect true, na
+# ovom portu stoji samo preusmeravanje na HTTPS.
+#
 role_zabbix_web_listen_port: 8080
 
-# Ime hosta pod kojim se frontend servira. Zvezdica prihvata sve.
+# Ime hosta pod kojim se frontend servira. Donja crta prihvata sve.
+#
+# Uz HTTPS ovo treba da bude STVARNO ime iz sertifikata — inace
+# pretrazivac prijavljuje neslaganje imena.
 #
 #   role_zabbix_web_hostname: "zabbix.example.com"
 #
@@ -100,6 +107,90 @@ role_zabbix_web_hostname: "_"
 
 # Adresa na kojoj web server slusa. Prazna vrednost znaci sve adrese.
 role_zabbix_web_listen_address: ""
+
+
+# =====================================================================
+# HTTPS
+# =====================================================================
+# Podrazumevano iskljuceno. Kada se ukljuci, OBAVEZNO je obezbediti
+# sertifikat i privatni kljuc.
+#
+role_zabbix_web_https_enabled: false
+
+role_zabbix_web_https_port: 8443
+
+# Kada je true, na HTTP portu stoji vhost koji sve preusmerava na
+# HTTPS (301). Postavi na false ako HTTP i HTTPS treba da rade
+# uporedo, ili ako preusmeravanje radi reverse proxy ispred.
+#
+role_zabbix_web_http_redirect: true
+
+# ---------------------------------------------------------------------
+# Sertifikat i kljuc
+# ---------------------------------------------------------------------
+# Putanje na CILJNOM hostu. Fajlovi mogu doci na dva nacina:
+#
+#   1. Vec postoje na hostu — postavila ih je rola "root_ca", ili si
+#      ih doneo rucno. Rola ih tada samo koristi i proverava da
+#      postoje.
+#
+#   2. Sadrzaj se zada kroz varijable ispod — rola ih tada upisuje na
+#      zadate putanje.
+#
+# Sertifikat treba da bude PUN LANAC (fullchain): prvo sertifikat
+# hosta, pa sertifikat izdavaoca. Sa samo listom sertifikatom
+# pretrazivac prijavljuje nepoznatog izdavaoca.
+#
+role_zabbix_web_tls_cert: /etc/ssl/certs/zabbix-frontend-fullchain.pem
+role_zabbix_web_tls_key: /etc/ssl/private/zabbix-frontend.key
+
+# Sadrzaj u PEM formatu. Prazno znaci da fajlovi vec postoje.
+#
+#   host_vars/srv-web-01.yml
+#     role_zabbix_web_tls_cert_content: |
+#       -----BEGIN CERTIFICATE-----
+#       ...
+#     role_zabbix_web_tls_key_content: |
+#       -----BEGIN PRIVATE KEY-----
+#       ...
+#
+# Privatni kljuc je TAJNA — drzi ga u host_vars, van git-a.
+#
+role_zabbix_web_tls_cert_content: ""
+role_zabbix_web_tls_key_content: ""
+
+# ---------------------------------------------------------------------
+# TLS parametri
+# ---------------------------------------------------------------------
+# Podrazumevano odgovara Mozilla "intermediate" preporuci: bez
+# TLSv1.0 i TLSv1.1, samo AEAD sifre sa perfect forward secrecy.
+#
+# Spusti na "TLSv1.2" ako neki stariji klijent ne podnosi TLSv1.3.
+#
+role_zabbix_web_tls_protocols: "TLSv1.2 TLSv1.3"
+
+role_zabbix_web_tls_ciphers: >-
+  ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384
+
+# HTTP/2. Rola sama bira ispravnu sintaksu prema verziji Nginx-a:
+# do 1.25.0 kroz "listen ... http2", od 1.25.1 kroz "http2 on".
+#
+role_zabbix_web_http2: true
+
+# ---------------------------------------------------------------------
+# HSTS
+# ---------------------------------------------------------------------
+# Zaglavlje kojim se pretrazivacu kaze da ubuduce ovaj host otvara
+# ISKLJUCIVO preko HTTPS-a.
+#
+# PAZNJA: pretrazivac to pamti max_age sekundi i ne moze se povuci
+# gasenjem opcije na serveru. Ako ti sertifikat istekne ili posluzis
+# sajt preko HTTP-a, klijenti ce dobiti gresku bez mogucnosti da je
+# preskoce. Zato je podrazumevano iskljuceno — ukljuci tek kada je
+# HTTPS stabilan.
+#
+role_zabbix_web_hsts_enabled: false
+role_zabbix_web_hsts_max_age: 31536000
 
 
 # =====================================================================
@@ -128,6 +219,15 @@ role_zabbix_web_php_timezone: Europe/Belgrade
 #     $DB['VERIFY_HOST'] = false;
 #
 role_zabbix_web_extra_config: ""
+
+# Proizvoljne Nginx direktive unutar server bloka. Koristi za stvari
+# koje rola ne pokriva (dodatna zaglavlja, ogranicavanje pristupa).
+#
+#   role_zabbix_web_nginx_extra_config: |
+#     allow 10.0.0.0/8;
+#     deny all;
+#
+role_zabbix_web_nginx_extra_config: ""
 
 
 # =====================================================================
