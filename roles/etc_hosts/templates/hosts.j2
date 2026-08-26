@@ -1,0 +1,24 @@
+{{ '#' }} /etc/hosts
+{{ '#' }}
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: etc_hosts
+{{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+{{ '#' }}
+{{ '#' }} Rola radi u rezimu "file" — ceo fajl dolazi iz sablona.
+{{ '#' }} Za aditivno ponasanje postavi:
+{{ '#' }}   role_etc_hosts_manage_mode: block
+
+{{ '#' }} Lokalne adrese.
+{% for _line in role_etc_hosts_localhost_lines %}
+{{ _line }}
+{% endfor %}
+{% if role_etc_hosts_self_enabled | bool %}
+{% set _self_names = role_etc_hosts_self_names if role_etc_hosts_self_names | length > 0 else ([ansible_fqdn, ansible_hostname] | unique) %}
+
+{{ '#' }} Sopstveno ime hosta. Bez ove linije sudo ceka na tajmaut
+{{ '#' }} pri svakom pozivu.
+{{ "%-15s" | format(role_etc_hosts_self_ip) }} {{ _self_names | join(' ') }}
+{% endif %}
+{% if role_etc_hosts_entries | length > 0 %}
+
+{% include 'entries.j2' %}
+{% endif %}
