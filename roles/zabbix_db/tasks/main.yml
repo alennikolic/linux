@@ -5,7 +5,8 @@
 #   2. Instalacija baze i Python biblioteke
 #   3. Konfiguracija performansi
 #   4. Kreiranje baze
-#   5. Kreiranje korisnika
+#   5. Kreiranje korisnika za Zabbix server
+#   6. Kreiranje korisnika za frontend
 #
 # Prijava kao root ide kroz unix socket. Na Ubuntu i Debianu root
 # koristi auth_socket dodatak, pa lozinka nije potrebna — dovoljno
@@ -47,6 +48,18 @@
           Ista vrednost mora biti i u role_zabbix_server_db_password.
         success_msg: "Lozinka je zadata."
 
+    # Ako se ovde omakne string umesto liste, mysql_user bi prosao
+    # kroz svaki KARAKTER stringa kao kroz zaseban host.
+    - name: "Provera da je role_zabbix_db_user_hosts lista"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_db_user_hosts | type_debug == 'list'
+        fail_msg: >-
+          role_zabbix_db_user_hosts mora biti lista, a zadato je
+          {{ role_zabbix_db_user_hosts | type_debug }}. Za jednu
+          adresu napisi listu sa jednom stavkom.
+        success_msg: "role_zabbix_db_user_hosts je lista."
+
     # Pogresna kolacija se otkriva tek kada frontend prijavi gresku,
     # dugo posle uvoza seme. Zato provera ide unapred.
     - name: "Provera kodnog rasporeda"
@@ -60,6 +73,24 @@
           Sa drugom kolacijom uvoz seme prolazi, ali frontend kasnije
           prijavljuje gresku.
         success_msg: "Kodni raspored je ispravan."
+
+    # Provere naloga za frontend se rade samo kada je taj nalog
+    # ukljucen, da podrazumevano ponasanje role ostane nepromenjeno.
+    - name: "Provere naloga za frontend"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_db_frontend_user != role_zabbix_db_user
+          - role_zabbix_db_frontend_password | length > 0
+          - role_zabbix_db_frontend_user_hosts | type_debug == 'list'
+          - role_zabbix_db_frontend_user_hosts | length > 0
+          - role_zabbix_db_frontend_priv | length > 0
+        fail_msg: >-
+          Nalog za frontend je ukljucen, ali podesavanja nisu potpuna.
+          Potrebno je: ime razlicito od role_zabbix_db_user, popunjen
+          role_zabbix_db_frontend_password i neprazna lista
+          role_zabbix_db_frontend_user_hosts.
+        success_msg: "Podesavanja naloga za frontend su ispravna."
+      when: role_zabbix_db_frontend_enabled | bool
 
     # -----------------------------------------------------------------
     # 2. Instalacija
@@ -89,23 +120,11 @@
     # 3. Konfiguracija
     # -----------------------------------------------------------------
     # Zaseban fajl, ne glavna konfiguracija — nadogradnja paketa je
-    # tako ne prepisuje.
-    #
-    # Ime fajla pocinje sa zz- da bi se ucitao POSLEDNJI. Vidi
-    # obrazlozenje u vars/main.yml.
-
-    # Ranije verzije role upisivale su 99-zabbix.cnf, koji se ucitavao
-    # PRE mysqld.cnf i time bio bez efekta. Brise se da dva fajla ne bi
-    # definisala iste opcije.
-    - name: "Uklanjanje konfiguracije iz ranijih verzija role"
-      ansible.builtin.file:
-        path: "{{ _zabbix_db_legacy_config_file }}"
-        state: absent
-      notify: "Restartuj bazu"
+    # tako ne prepisuje. Prefiks 99- osigurava da se ucita poslednja.
 
     - name: "Upis konfiguracije performansi"
       ansible.builtin.template:
-        src: zz-zabbix.cnf.j2
+        src: 99-zabbix.cnf.j2
         dest: "{{ _zabbix_db_config_file }}"
         owner: root
         group: root
@@ -131,20 +150,43 @@
         login_unix_socket: "{{ _zabbix_db_login_socket }}"
 
     # -----------------------------------------------------------------
-    # 5. Korisnik
+    # 5. Korisnik za Zabbix server
     # -----------------------------------------------------------------
     # ALL na jednoj bazi je vise nego sto Zabbix serveru treba u
     # svakodnevnom radu, ali je neophodno za uvoz seme i za nadogradnju
     # baze pri prelasku na noviju verziju Zabbix-a.
+    #
+    # Jedan nalog po hostu iz liste. Rola postojece naloge sa drugih
+    # adresa NE brise — to je svesna odluka, jer bi automatsko brisanje
+    # moglo prekinuti vezu servera koji trenutno radi.
 
     - name: "Kreiranje korisnika {{ role_zabbix_db_user }}"
       community.mysql.mysql_user:
         name: "{{ role_zabbix_db_user }}"
         password: "{{ role_zabbix_db_password }}"
-        host: "{{ role_zabbix_db_user_host }}"
+        host: "{{ item }}"
         priv: "{{ role_zabbix_db_name }}.*:ALL"
         state: present
         login_unix_socket: "{{ _zabbix_db_login_socket }}"
+      loop: "{{ _zabbix_db_user_hosts }}"
       no_log: true
+
+    # -----------------------------------------------------------------
+    # 6. Korisnik za frontend
+    # -----------------------------------------------------------------
+    # Frontend cita bazu direktno, ali ne menja strukturu tabela.
+    # Privilegije su ogranicene na rad sa podacima.
+
+    - name: "Kreiranje korisnika za frontend {{ role_zabbix_db_frontend_user }}"
+      community.mysql.mysql_user:
+        name: "{{ role_zabbix_db_frontend_user }}"
+        password: "{{ role_zabbix_db_frontend_password }}"
+        host: "{{ item }}"
+        priv: "{{ role_zabbix_db_name }}.*:{{ role_zabbix_db_frontend_priv }}"
+        state: present
+        login_unix_socket: "{{ _zabbix_db_login_socket }}"
+      loop: "{{ role_zabbix_db_frontend_user_hosts }}"
+      no_log: true
+      when: role_zabbix_db_frontend_enabled | bool
 
   when: role_zabbix_db_enabled | default(false) | bool
