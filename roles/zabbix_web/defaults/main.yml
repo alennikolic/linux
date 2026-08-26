@@ -20,6 +20,11 @@
 # instalaciju koji se inace pojavljuje pri prvom otvaranju frontenda.
 #
 # APACHE VISE NIJE PODRZAN. Rola radi iskljucivo sa Nginx-om.
+#
+# ZAVISNOST: uz automatsko pravljenje self-signed sertifikata potrebna
+# je kolekcija community.crypto:
+#
+#   ansible-galaxy collection install community.crypto
 
 
 # =====================================================================
@@ -99,7 +104,8 @@ role_zabbix_web_listen_port: 8080
 # Ime hosta pod kojim se frontend servira. Donja crta prihvata sve.
 #
 # Uz HTTPS ovo treba da bude STVARNO ime iz sertifikata — inace
-# pretrazivac prijavljuje neslaganje imena.
+# pretrazivac prijavljuje neslaganje imena. Ista vrednost se koristi
+# i kao podrazumevani CN self-signed sertifikata.
 #
 #   role_zabbix_web_hostname: "zabbix.example.com"
 #
@@ -112,8 +118,7 @@ role_zabbix_web_listen_address: ""
 # =====================================================================
 # HTTPS
 # =====================================================================
-# Podrazumevano iskljuceno. Kada se ukljuci, OBAVEZNO je obezbediti
-# sertifikat i privatni kljuc.
+# Podrazumevano iskljuceno.
 #
 role_zabbix_web_https_enabled: false
 
@@ -128,14 +133,19 @@ role_zabbix_web_http_redirect: true
 # ---------------------------------------------------------------------
 # Sertifikat i kljuc
 # ---------------------------------------------------------------------
-# Putanje na CILJNOM hostu. Fajlovi mogu doci na dva nacina:
+# Putanje na CILJNOM hostu. Fajlovi mogu doci na TRI nacina, redom
+# kojim ih rola razmatra:
 #
-#   1. Vec postoje na hostu — postavila ih je rola "root_ca", ili si
-#      ih doneo rucno. Rola ih tada samo koristi i proverava da
-#      postoje.
+#   1. Sadrzaj zadat kroz role_zabbix_web_tls_cert_content i
+#      _key_content — rola ih upisuje na putanje ispod. Ovo uvek ima
+#      prednost i prepisuje postojece fajlove.
 #
-#   2. Sadrzaj se zada kroz varijable ispod — rola ih tada upisuje na
-#      zadate putanje.
+#   2. Fajlovi vec postoje na hostu — postavila ih je rola "root_ca",
+#      doneti su rucno, ili ih je ova rola napravila ranije. Rola ih
+#      tada samo koristi.
+#
+#   3. Fajlova nema — rola pravi PRIVREMEN self-signed sertifikat,
+#      ako je role_zabbix_web_tls_selfsigned true.
 #
 # Sertifikat treba da bude PUN LANAC (fullchain): prvo sertifikat
 # hosta, pa sertifikat izdavaoca. Sa samo listom sertifikatom
@@ -144,7 +154,8 @@ role_zabbix_web_http_redirect: true
 role_zabbix_web_tls_cert: /etc/ssl/certs/zabbix-frontend-fullchain.pem
 role_zabbix_web_tls_key: /etc/ssl/private/zabbix-frontend.key
 
-# Sadrzaj u PEM formatu. Prazno znaci da fajlovi vec postoje.
+# Sadrzaj u PEM formatu. Prazno znaci da se koriste fajlovi sa putanja
+# iznad.
 #
 #   host_vars/srv-web-01.yml
 #     role_zabbix_web_tls_cert_content: |
@@ -158,6 +169,56 @@ role_zabbix_web_tls_key: /etc/ssl/private/zabbix-frontend.key
 #
 role_zabbix_web_tls_cert_content: ""
 role_zabbix_web_tls_key_content: ""
+
+# ---------------------------------------------------------------------
+# Automatski self-signed sertifikat
+# ---------------------------------------------------------------------
+# Kada je true a NIJEDAN od dva fajla ne postoji, rola pravi privremen
+# self-signed sertifikat da bi frontend uopste mogao da radi preko
+# HTTPS-a.
+#
+# PAZNJA: pretrazivac ce prijavljivati gresku koju korisnik mora
+# rucno preskociti. Ovo je polazna tacka, ne resenje. Kada dobijes
+# pravi sertifikat, samo prekopiraj fajlove preko postojecih —
+# rola ih NECE prepisati, jer pravi nove iskljucivo kada oba
+# nedostaju.
+#
+# Postavi na false ako zelis da rola prekine rad umesto da improvizuje.
+#
+role_zabbix_web_tls_selfsigned: true
+
+# Common Name sertifikata. Podrazumevano prati role_zabbix_web_hostname,
+# a kada je on "_" pada na ime hosta iz inventory-ja.
+#
+# Rola sama dodaje SAN unos za CN — kao IP: ako je CN IPv4 adresa,
+# inace kao DNS:. Klijenti od Chrome 58 naovamo ignorisu CN i gledaju
+# iskljucivo SAN, pa sertifikat bez njega biva odbijen.
+#
+role_zabbix_web_tls_selfsigned_cn: >-
+  {{ role_zabbix_web_hostname
+     if role_zabbix_web_hostname != '_'
+     else inventory_hostname }}
+
+# Dodatni SAN unosi, u formatu "DNS:ime" ili "IP:adresa".
+#
+#   role_zabbix_web_tls_selfsigned_sans:
+#     - "IP:10.0.0.60"
+#     - "DNS:zabbix"
+#
+role_zabbix_web_tls_selfsigned_sans: []
+
+# Organizacija u subject polju. Prazno se ne upisuje.
+role_zabbix_web_tls_selfsigned_org: ""
+
+# Vazenje u danima. 397 je gornja granica koju vecina klijenata
+# prihvata bez prigovora.
+role_zabbix_web_tls_selfsigned_days: 397
+
+role_zabbix_web_tls_selfsigned_key_size: 2048
+
+# Paketi potrebni modulima iz community.crypto na ciljnom hostu.
+role_zabbix_web_tls_dependency_packages:
+  - python3-cryptography
 
 # ---------------------------------------------------------------------
 # TLS parametri
@@ -186,8 +247,10 @@ role_zabbix_web_http2: true
 # PAZNJA: pretrazivac to pamti max_age sekundi i ne moze se povuci
 # gasenjem opcije na serveru. Ako ti sertifikat istekne ili posluzis
 # sajt preko HTTP-a, klijenti ce dobiti gresku bez mogucnosti da je
-# preskoce. Zato je podrazumevano iskljuceno — ukljuci tek kada je
-# HTTPS stabilan.
+# preskoce.
+#
+# Uz self-signed sertifikat HSTS je posebno los izbor: greska
+# sertifikata uz HSTS se u vecini pretrazivaca NE MOZE preskociti.
 #
 role_zabbix_web_hsts_enabled: false
 role_zabbix_web_hsts_max_age: 31536000
@@ -220,8 +283,7 @@ role_zabbix_web_php_timezone: Europe/Belgrade
 #
 role_zabbix_web_extra_config: ""
 
-# Proizvoljne Nginx direktive unutar server bloka. Koristi za stvari
-# koje rola ne pokriva (dodatna zaglavlja, ogranicavanje pristupa).
+# Proizvoljne Nginx direktive unutar server bloka.
 #
 #   role_zabbix_web_nginx_extra_config: |
 #     allow 10.0.0.0/8;
