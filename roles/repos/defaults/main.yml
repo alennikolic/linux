@@ -19,6 +19,10 @@
 #
 # Prvi je predvidljiv i idempotentan. Drugi postoji za vendore koji
 # ne dokumentuju direktan APT unos. Vidi README za razliku.
+#
+# Parametre menjaj u:
+#   group_vars/all.yml        — globalno
+#   host_vars/<host>.yml      — za pojedinacan host
 
 
 # =====================================================================
@@ -55,4 +59,121 @@ role_repos_enabled: false
 #         components: [main]
 #         signed_by: "https://repo.zabbix.com/zabbix-official-repo.key"
 #
-# PAZNJA na putanju: Zabbix je menjao strukturu
+# PAZNJA na putanju: Zabbix je menjao strukturu URL-a izmedju verzija.
+#
+#   7.0 LTS   /zabbix/7.0/ubuntu
+#   7.2       /zabbix/7.2/release/ubuntu
+#   7.4       /zabbix/7.4/release/ubuntu
+#
+# Od 7.2 postoje dva odvojena repozitorijuma: "release" (zakovana
+# tacka izdanja) i "stable" (prati minor izdanja unutar iste
+# verzije). Za produkciju je "release" predvidljiviji.
+#
+# ---------------------------------------------------------------------
+# Primer: Docker
+# ---------------------------------------------------------------------
+#     role_repos_list:
+#       - name: docker
+#         uris: "https://download.docker.com/linux/ubuntu"
+#         suites: "{{ ansible_distribution_release }}"
+#         components: [stable]
+#         architectures: amd64
+#         signed_by: "https://download.docker.com/linux/ubuntu/gpg"
+#
+# Docker zvanicno trazi da arhitektura bude eksplicitno navedena.
+# Bez toga APT pokusava da povuce i i386 indekse kojih nema, pa
+# apt update prijavljuje gresku.
+#
+# ---------------------------------------------------------------------
+# Primer: MySQL
+# ---------------------------------------------------------------------
+#     role_repos_list:
+#       - name: mysql
+#         uris: "https://repo.mysql.com/apt/ubuntu/"
+#         suites: "{{ ansible_distribution_release }}"
+#         components: [mysql-8.0, mysql-tools]
+#         signed_by: "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023"
+#
+# Kljuc MySQL-a redovno istice, a godina u imenu fajla nije stabilna.
+# Kada apt update prijavi EXPKEYSIG ili NO_PUBKEY, problem je u
+# kljucu, ne u roli — proveri koji je aktuelan na repo.mysql.com.
+#
+# ---------------------------------------------------------------------
+# Uklanjanje repozitorijuma
+# ---------------------------------------------------------------------
+#     role_repos_list:
+#       - name: stari-repo
+#         uris: "https://example.com/apt"
+#         state: absent
+#
+# Unos mora OSTATI u listi dok se ne primeni nad svim hostovima. Ako
+# ga samo obrises iz liste, fajl na serveru ostaje — rola tada nema
+# nikakvu informaciju da je nekada postojao.
+#
+# NAPOMENA: lista se NE spaja izmedju nivoa. Vrednost u
+# host_vars/<host>.yml u celosti zamenjuje onu iz group_vars/all.yml.
+#
+role_repos_list: []
+
+
+# =====================================================================
+# VENDOROVI .deb RELEASE PAKETI (alternativni nacin)
+# =====================================================================
+# Lista recnika. Koristi se samo kada vendor ne dokumentuje direktan
+# APT unos, ili kada zelis da putanju i kljuc odrzava sam vendor.
+#
+# Polja:
+#   name   — ime paketa kako ga vidi dpkg (obavezno)
+#   url    — puna adresa .deb fajla (obavezno za state: present)
+#   state  — present (podrazumevano) ili absent
+#
+# ---------------------------------------------------------------------
+# Primer
+# ---------------------------------------------------------------------
+#   group_vars/all.yml
+#     role_repos_deb_packages:
+#       - name: zabbix-release
+#         url: "https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest+ubuntu24.04_all.deb"
+#
+# Uklanjanje, zajedno sa .sources fajlom koji je paket upisao:
+#
+#     role_repos_deb_packages:
+#       - name: zabbix-release
+#         state: absent
+#
+# ZAMKE ovog pristupa:
+#
+#   1. Verzija Ubuntua je deo imena fajla, pa isti URL ne radi na
+#      22.04 i 24.04. Za mesovitu flotu koristi promenljivu:
+#        url: ".../zabbix-release_latest+ubuntu{{ ansible_distribution_version }}_all.deb"
+#
+#   2. Revizija paketa se menja bez najave — zabbix-release_7.0-1 je
+#      postao 7.0-2, pa stari URL vraca 404. Alias "latest" u imenu
+#      to zaobilazi, ali ni njegova sema nije stabilna izmedju
+#      verzija Zabbix-a:
+#        7.0    zabbix-release_latest+ubuntu24.04_all.deb
+#        7.2+   zabbix-release_latest_7.2+ubuntu24.04_all.deb
+#
+#   3. Fajl se preuzima pri SVAKOM pokretanju. Modul poredi verziju
+#      sa instaliranom i prijavljuje ok, ali saobracaj postoji.
+#
+# NE MESAJ oba nacina za isti repozitorijum — dobices dva .sources
+# fajla koja pokazuju na isto mesto, pa apt update prijavljuje
+# duplirane unose.
+#
+role_repos_deb_packages: []
+
+
+# =====================================================================
+# APT KES
+# =====================================================================
+# Osvezavanje liste paketa posle izmene izvora.
+#
+# Radi kroz handler, dakle na kraju play-a, a ne posle svakog unosa.
+# Posto rola "packages" ide u zasebnom, kasnijem play-u, redosled je
+# ispravan i bez dodatnog flush_handlers.
+#
+# Iskljuci samo ako kes osvezavas negde drugde — inace ce instalacija
+# iz tek dodatog repozitorijuma pasti.
+#
+role_repos_update_cache: true
