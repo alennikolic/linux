@@ -17,7 +17,23 @@ _zabbix_db_config_dir: >-
   {{ '/etc/mysql/mariadb.conf.d' if role_zabbix_db_engine == 'mariadb'
      else '/etc/mysql/mysql.conf.d' }}
 
-_zabbix_db_config_file: "{{ _zabbix_db_config_dir }}/99-zabbix.cnf"
+# PAZNJA NA IME FAJLA
+#
+# MySQL ucitava fajlove iz !includedir foldera azbucnim redom, a kada
+# se ista opcija pojavi vise puta, vazi POSLEDNJA procitana vrednost.
+#
+# Prefiks tipa "99-" ovde NE radi ono sto radi kod systemd-a, sysctl-a
+# ili logrotate-a. Cifra 9 u ASCII tabeli dolazi pre slova m, pa bi se
+# 99-zabbix.cnf ucitao PRE mysqld.cnf i njegove vrednosti bi bile
+# pregazene.
+#
+# Zato prefiks "zz-" — sortira se posle svih fajlova koje isporucuje
+# paket (mysql.cnf, mysqld.cnf, 50-server.cnf na MariaDB).
+_zabbix_db_config_file: "{{ _zabbix_db_config_dir }}/zz-zabbix.cnf"
+
+# Ime iz ranijih verzija role. Rola ga brise da dva fajla ne bi
+# istovremeno definisala iste opcije.
+_zabbix_db_legacy_config_file: "{{ _zabbix_db_config_dir }}/99-zabbix.cnf"
 
 # Socket kroz koji se Ansible prijavljuje kao root. Na Ubuntu i
 # Debianu root koristi auth_socket, pa lozinka nije potrebna.
