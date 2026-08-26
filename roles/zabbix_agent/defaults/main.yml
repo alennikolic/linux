@@ -31,7 +31,7 @@ role_zabbix_agent_enabled: false
 # zabbix-agent2  — noviji agent, pisan u Go-u, podrzava dodatke
 #
 # Ime paketa odredjuje i ime servisa, putanju konfiguracije i
-# include foldera — rola ih sama izvodi.
+# include foldera — rola ih sama izvodi u vars/main.yml.
 #
 role_zabbix_agent_package: zabbix-agent
 
@@ -48,4 +48,161 @@ role_zabbix_agent_version: ""
 
 
 # =====================================================================
-# ADRESA ZABBIX
+# ADRESA ZABBIX SERVERA
+# =====================================================================
+# OBAVEZNO. Adresa sa koje agent prihvata pasivne provere. Moze biti
+# IP adresa, ime hosta ili lista razdvojena zarezima.
+#
+# Ako hostovi idu kroz proxy, ovde ide adresa proxy-ja, ne servera.
+#
+#   role_zabbix_agent_server: "10.0.0.50"
+#
+# Rola prekida rad ako je ova vrednost prazna — agent bi bio
+# instaliran ali ne bi imao kome da se javi.
+#
+role_zabbix_agent_server: ""
+
+# Kome agent SALJE aktivne provere. Prazna vrednost znaci da se
+# koristi ista adresa kao role_zabbix_agent_server.
+#
+# Razdvaja se od gornje kada server i proxy nisu ista masina, ili
+# kada je potreban port razlicit od 10051:
+#
+#   role_zabbix_agent_server_active: "10.0.0.60:10051"
+#
+role_zabbix_agent_server_active: ""
+
+# Ime pod kojim se agent predstavlja Zabbix serveru.
+#
+# MORA se poklapati sa imenom hosta u Zabbix konfiguraciji. Ako se
+# razlikuje, pasivne provere rade a aktivne ne — bez jasne greske.
+#
+# Podrazumevana vrednost znaci da je ime iz hosts.ini merodavno.
+#
+role_zabbix_agent_hostname: "{{ inventory_hostname }}"
+
+# Metapodaci za automatsku registraciju hosta.
+#
+# Na Zabbix strani se pravi akcija koja hostove sa odredjenim
+# metapodatkom sama dodaje u grupu i template:
+#
+#   role_zabbix_agent_host_metadata: "linux-production"
+#
+role_zabbix_agent_host_metadata: ""
+
+
+# =====================================================================
+# MREZA
+# =====================================================================
+
+role_zabbix_agent_listen_port: 10050
+
+# Adresa na kojoj agent slusa. Prazna vrednost znaci sve adrese.
+#
+# Sluzi za ogranicavanje na jedan interfejs:
+#
+#   role_zabbix_agent_listen_ip: "10.0.0.11"
+#
+# Ako je postavljena a Zabbix server dolazi sa druge adrese, veza
+# se odbija bez poruke u agentovom logu.
+#
+role_zabbix_agent_listen_ip: ""
+
+# Sekunde koje agent ceka na odgovor provere. Zabbix 7.0 dozvoljava
+# do 30, starije verzije do 30 samo za pojedine tipove stavki.
+role_zabbix_agent_timeout: 3
+
+
+# =====================================================================
+# LOGOVANJE
+# =====================================================================
+# Putanja se NE izvodi iz imena paketa — uz zabbix-agent2 promeni je
+# rucno na /var/log/zabbix/zabbix_agent2.log.
+#
+role_zabbix_agent_logfile: /var/log/zabbix/zabbix_agentd.log
+
+# Velicina u MB posle koje agent sam rotira log. Nula iskljucuje
+# rotaciju, sto ima smisla samo ako logrotate preuzme posao.
+role_zabbix_agent_logfile_size: 10
+
+# 0–5. Nivoi 4 i 5 brzo pune disk i koriste se samo privremeno,
+# pri trazenju uzroka problema.
+role_zabbix_agent_debug_level: 3
+
+
+# =====================================================================
+# DOZVOLJENI KLJUCEVI
+# =====================================================================
+# AllowKey linije se u sablonu ispisuju PRE DenyKey linija, pa su
+# izuzeci u role_zabbix_agent_allow_keys jaci od zabrane ispod.
+#
+#   role_zabbix_agent_allow_keys:
+#     - "system.run[/usr/local/bin/provera-diska.sh]"
+#
+role_zabbix_agent_allow_keys: []
+
+# Podrazumevana zabrana system.run[*] nije formalnost — bez nje
+# Zabbix server moze izvrsiti proizvoljnu komandu na svakom hostu.
+# Ne uklanjaj je; dodaj konkretan izuzetak iznad.
+#
+role_zabbix_agent_deny_keys:
+  - "system.run[*]"
+
+
+# =====================================================================
+# TLS
+# =====================================================================
+# Podrazumevano iskljuceno.
+#
+# Vrednosti: unencrypted (podrazumevano), psk, cert
+#
+# TLSAccept prihvata i vise vrednosti razdvojenih zarezom, sto je
+# koristan medjukorak pri prelasku na sifrovanje:
+#
+#   role_zabbix_agent_tls_accept: "unencrypted,psk"
+#
+# Tada agent prihvata i stare i nove veze dok se Zabbix strana ne
+# prepodesi, pa se tek onda suzava na "psk".
+#
+role_zabbix_agent_tls_connect: unencrypted
+role_zabbix_agent_tls_accept: unencrypted
+
+# Isti identitet i kljuc moraju biti upisani i na Zabbix strani, u
+# podesavanjima hosta. Neusklađenost daje gresku o rukovanju vezom.
+#
+# Kljuc generisi sa:
+#   openssl rand -hex 32
+#
+# I obavezno sifruj pre upisa u inventory:
+#   ansible-vault encrypt_string '<psk_hex>' --name 'role_zabbix_agent_tls_psk'
+#
+role_zabbix_agent_tls_psk_identity: ""
+role_zabbix_agent_tls_psk: ""
+
+# Fajl dobija dozvole 0400 i vlasnika zabbix — agent odbija da
+# startuje ako su dozvole sire.
+role_zabbix_agent_tls_psk_file: /etc/zabbix/zabbix_agent.psk
+
+
+# =====================================================================
+# DODATNA KONFIGURACIJA
+# =====================================================================
+# Proizvoljne linije koje se dodaju na kraj konfiguracionog fajla.
+# Koristi za opcije koje rola ne pokriva.
+#
+#   role_zabbix_agent_extra_config: |
+#     UserParameter=mysql.ping,mysqladmin ping | grep -c alive
+#     BufferSize=200
+#
+# Ono sto treba da prezivi nadogradnju paketa i ponovno pokretanje
+# role bolje je smestiti u include folder umesto ovde.
+#
+role_zabbix_agent_extra_config: ""
+
+
+# =====================================================================
+# SERVIS
+# =====================================================================
+
+role_zabbix_agent_service_enabled: true
+role_zabbix_agent_service_state: started
