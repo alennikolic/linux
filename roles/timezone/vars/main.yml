@@ -1,0 +1,33 @@
+---
+# roles/timezone/vars/main.yml
+#
+# Izvedene vrednosti. NE menjati kroz inventory — ovo su konstante
+# koje zavise od izbora u role_timezone_ntp_service.
+#
+# Prefiks donje crte oznacava da varijabla nije deo javnog interfejsa
+# role.
+#
+# Putanje su Debian/Ubuntu. Za RHEL familiju bi se razlikovale
+# (/etc/chrony.conf umesto /etc/chrony/chrony.conf), pa rola za NTP
+# deo eksplicitno trazi Debian familiju.
+
+_timezone_ntp_map:
+
+  systemd-timesyncd:
+    package: systemd-timesyncd
+    service: systemd-timesyncd
+    dropin_dir: /etc/systemd/timesyncd.conf.d
+    dropin_file: /etc/systemd/timesyncd.conf.d/99-ansible.conf
+    template: timesyncd.conf.j2
+
+  chrony:
+    package: chrony
+    service: chrony
+    dropin_dir: /etc/chrony/conf.d
+    dropin_file: /etc/chrony/conf.d/99-ansible.conf
+    template: chrony.conf.j2
+
+# Skracenica koja se koristi u taskovima i handleru. Jinja je lenja,
+# pa se izraz ispod ne izracunava dok se ne upotrebi — posle assert
+# provere da je vrednost dozvoljena.
+_timezone_ntp: "{{ _timezone_ntp_map[role_timezone_ntp_service] }}"
