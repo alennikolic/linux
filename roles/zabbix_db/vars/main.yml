@@ -32,4 +32,4 @@ _zabbix_db_login_socket: /run/mysqld/mysqld.sock
 # Izraz je napisan u jednom redu namerno: Ansible cuva tip vrednosti
 # samo kada je cela vrednost jedan Jinja izraz. Prelomljen u vise
 # redova rezultat bi bio string umesto liste.
-_zabbix_db_user_hosts: "{{ role_zabbix_db_user_hosts if (role_zabbix_db_user_hosts | length > 0) else [role_zabbix_db_user_host] }}"
+_zabbix_db_server_user_hosts: "{{ role_zabbix_db_server_user_hosts if (role_zabbix_db_server_user_hosts | length > 0) else [role_zabbix_db_user_host] }}"
