@@ -7,6 +7,11 @@
 #
 # Prvi koristi ansible.builtin.deb822_repository, koji sam preuzima
 # GPG kljuc kada je signed_by zadat kao URL.
+#
+# Obe liste su opcione i medjusobno nezavisne. Svaka referenca ide
+# kroz default([], true) — drugi argument znaci da i prazan string
+# pada na praznu listu, ne samo nedefinisana vrednost. Bez toga rola
+# puca na hostu koji koristi samo jedan od dva nacina.
 
 - name: "Upravljanje APT repozitorijumima"
   block:
@@ -26,6 +31,20 @@
           host_vars/<host>.yml sa role_repos_enabled: false
         success_msg: "Distribucija je podrzana."
 
+    # Host u grupi [apply_repos] bez ijedne popunjene liste nije
+    # greska, ali jeste znak da je tu bez razloga. Prijavljuje se kao
+    # poruka, ne kao prekid — mesovita flota gde samo neki hostovi
+    # imaju dodatne izvore je legitiman scenario.
+    - name: "Obavestenje kada nijedna lista nije popunjena"
+      ansible.builtin.debug:
+        msg: >-
+          Ni role_repos_list ni role_repos_deb_packages nisu popunjene.
+          Rola nema sta da odradi na ovom hostu. Ako to nije namerno,
+          upisi vrednosti u group_vars/all.yml ili host_vars/<host>.yml.
+      when:
+        - (role_repos_list | default([], true) | length) == 0
+        - (role_repos_deb_packages | default([], true) | length) == 0
+
     - name: "Provera unosa u role_repos_list"
       ansible.builtin.assert:
         that:
@@ -34,7 +53,7 @@
         fail_msg: >-
           Unos u role_repos_list nema obavezno polje "name" ili "uris".
           Problematican unos: {{ item }}
-      loop: "{{ role_repos_list }}"
+      loop: "{{ role_repos_list | default([], true) }}"
       loop_control:
         label: "{{ item.name | default('BEZ IMENA') }}"
 
@@ -48,14 +67,35 @@
         fail_msg: >-
           Unos u role_repos_deb_packages mora imati "name", a za
           state: present i "url". Problematican unos: {{ item }}
-      loop: "{{ role_repos_deb_packages }}"
+      loop: "{{ role_repos_deb_packages | default([], true) }}"
       loop_control:
         label: "{{ item.name | default('BEZ IMENA') }}"
+
+    # Isto ime u obe liste znaci da isti repozitorijum stize sa dve
+    # strane — dva .sources fajla ka istom mestu, pa apt update
+    # prijavljuje duplikate. Hvata se ovde, pre nego sto se upise.
+    - name: "Provera da se nacini ne preklapaju"
+      ansible.builtin.assert:
+        that:
+          - >-
+            (role_repos_list | default([], true) | map(attribute='name') | list)
+            | intersect(
+                role_repos_deb_packages | default([], true)
+                | map(attribute='name') | map('regex_replace', '-release$', '') | list
+              ) | length == 0
+        fail_msg: >-
+          Isti repozitorijum je naveden i u role_repos_list i u
+          role_repos_deb_packages. Izaberi jedan nacin — dva izvora
+          ka istom mestu daju duplirane unose u APT-u.
+        success_msg: "Nema preklapanja izmedju dva nacina."
 
     # -----------------------------------------------------------------
     # 1. Direktan upis APT izvora
     # -----------------------------------------------------------------
 
+    # Folder se kreira samo kada stvarno ima repozitorijuma za upis.
+    # Na hostu koji koristi iskljucivo .deb release pakete nema
+    # razloga praviti ga — kljuc upisuje sam paket.
     - name: "Folder za GPG kljuceve"
       ansible.builtin.file:
         path: /etc/apt/keyrings
@@ -63,6 +103,7 @@
         owner: root
         group: root
         mode: '0755'
+      when: (role_repos_list | default([], true) | length) > 0
 
     - name: "Upis APT repozitorijuma"
       ansible.builtin.deb822_repository:
@@ -75,7 +116,7 @@
         architectures: "{{ item.architectures | default(omit) }}"
         enabled: "{{ item.enabled | default(true) }}"
         state: "{{ item.state | default('present') }}"
-      loop: "{{ role_repos_list }}"
+      loop: "{{ role_repos_list | default([], true) }}"
       loop_control:
         label: "{{ item.name }}"
       notify: "Osvezi APT kes"
@@ -91,7 +132,7 @@
       ansible.builtin.apt:
         deb: "{{ item.url }}"
         state: present
-      loop: "{{ role_repos_deb_packages }}"
+      loop: "{{ role_repos_deb_packages | default([], true) }}"
       loop_control:
         label: "{{ item.name }}"
       when: (item.state | default('present')) == 'present'
@@ -103,7 +144,7 @@
         name: "{{ item.name }}"
         state: absent
         purge: true
-      loop: "{{ role_repos_deb_packages }}"
+      loop: "{{ role_repos_deb_packages | default([], true) }}"
       loop_control:
         label: "{{ item.name }}"
       when: (item.state | default('present')) == 'absent'
