@@ -7,6 +7,10 @@
 {{ '#' }} ostalih iz istog foldera. MySQL cita fajlove azbucnim redom
 {{ '#' }} i primenjuje poslednju procitanu vrednost svake opcije, pa
 {{ '#' }} samo tako podesavanja odavde pobedjuju ona iz mysqld.cnf.
+{{ '#' }}
+{{ '#' }} Ime koje pocinje ciframa (99-) radi SUPROTNO od ocekivanog:
+{{ '#' }} cifra 9 dolazi pre slova m, pa bi se fajl ucitao pre
+{{ '#' }} mysqld.cnf i njegove vrednosti bile pregazene.
 
 [mysqld]
 {{ '#' }} --- Mreza ------------------------------------------------------
