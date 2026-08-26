@@ -1,0 +1,306 @@
+---
+# roles/root_ca/tasks/main.yml
+#
+# Tok:
+#   1. Provere (assert)
+#   2. Zavisnosti i folderi
+#   3. Kljuc CA
+#   4. Provera identiteta postojeceg CA — pre nego sto se bilo sta upise
+#   5. Sertifikat CA
+#   6. Provera isteka CA
+#   7. Poverenje na ovom hostu (opciono)
+#   8. Izdavanje sertifikata (tasks/issue.yml po unosu)
+#   9. Preuzimanje na kontrolni cvor (opciono)
+
+- name: "Upravljanje lokalnim Root CA"
+  block:
+
+    # -----------------------------------------------------------------
+    # 1. Provere
+    # -----------------------------------------------------------------
+
+    # Svaki host bi napravio sopstveni CA. Greska se otkriva tek kada
+    # poverenje ne proradi, a do tada je vec izdato nesto sertifikata.
+    - name: "Provera da grupa sadrzi samo jedan host"
+      ansible.builtin.assert:
+        that:
+          - groups[role_root_ca_group_name] | default([]) | length <= 1
+        fail_msg: >-
+          Grupa [{{ role_root_ca_group_name }}] sadrzi
+          {{ groups[role_root_ca_group_name] | default([]) | length }} hostova:
+          {{ groups[role_root_ca_group_name] | default([]) | join(', ') }}.
+          Svaki bi napravio sopstveni, nezavisan CA. Ostavi jedan host
+          u grupi, ili postavi role_root_ca_allow_multiple_hosts: true
+          ako to zaista zelis.
+        success_msg: "Grupa sadrzi jedan host."
+      when: not role_root_ca_allow_multiple_hosts | bool
+
+    - name: "Provera da su podaci o CA popunjeni"
+      ansible.builtin.assert:
+        that:
+          - role_root_ca_common_name | length > 0
+          - "'CHANGEME' not in role_root_ca_common_name"
+          - "'CHANGEME' not in role_root_ca_organization"
+        fail_msg: >-
+          role_root_ca_common_name i role_root_ca_organization jos
+          sadrze CHANGEME. Popuni ih u group_vars/all.yml pre
+          pokretanja. Ove vrednosti se posle prvog pokretanja ne mogu
+          menjati bez ponovnog pravljenja celog CA.
+        success_msg: "Identitet CA: {{ role_root_ca_common_name }}"
+
+    - name: "Provera tipa kljuca"
+      ansible.builtin.assert:
+        that:
+          - role_root_ca_key_type in ['RSA', 'ECC']
+          - role_root_ca_cert_key_type in ['RSA', 'ECC']
+        fail_msg: >-
+          Tip kljuca mora biti RSA ili ECC. Zadato: CA
+          '{{ role_root_ca_key_type }}', izdati sertifikati
+          '{{ role_root_ca_cert_key_type }}'.
+        success_msg: "Tip kljuca ispravan."
+
+    - name: "Provera da je lista sertifikata lista"
+      ansible.builtin.assert:
+        that:
+          - role_root_ca_issued_certs is sequence
+          - role_root_ca_issued_certs is not string
+        fail_msg: >-
+          role_root_ca_issued_certs mora biti lista mapa, a ne
+          '{{ role_root_ca_issued_certs | type_debug }}'.
+        success_msg: >-
+          Zadato sertifikata: {{ role_root_ca_issued_certs | length }}
+
+    - name: "Provera strukture pojedinacnih sertifikata"
+      ansible.builtin.assert:
+        that:
+          - item.cn is defined
+          - item.cn | length > 0
+          - item.state | default('present') in ['present', 'absent']
+          - item.sans | default([]) is sequence
+        fail_msg: >-
+          Unos u role_root_ca_issued_certs nema popunjeno cn, ili
+          state ima vrednost izvan present/absent, ili sans nije
+          lista. Sporan unos: {{ item }}
+        success_msg: "Unos ispravan."
+      loop: "{{ role_root_ca_issued_certs }}"
+      loop_control:
+        label: "{{ item.cn | default('bez cn') }}"
+
+    # Format "DNS:ime" ili "IP:adresa" je ono sto openssl_csr ocekuje.
+    # Golo ime bez prefiksa modul odbija porukom koja ne govori jasno
+    # u cemu je problem.
+    - name: "Provera formata SAN unosa"
+      ansible.builtin.assert:
+        that:
+          - item.1 is match('^(DNS|IP|URI|email):')
+        fail_msg: >-
+          SAN unos '{{ item.1 }}' sertifikata '{{ item.0.cn }}' nema
+          prefiks tipa. Ocekivan format je "DNS:ime.example.com" ili
+          "IP:10.0.0.10".
+        success_msg: "SAN unos ispravan."
+      loop: "{{ role_root_ca_issued_certs | subelements('sans', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.cn }} -> {{ item.1 }}"
+
+    - name: "Provera da se isti CN ne pojavljuje dva puta"
+      vars:
+        _root_ca_cns: "{{ role_root_ca_issued_certs | map(attribute='cn') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _root_ca_cns | length == _root_ca_cns | unique | length
+        fail_msg: >-
+          Isti CN je naveden vise puta u role_root_ca_issued_certs.
+          Unosi bi pisali preko istih fajlova. Ponovljeno:
+          {{ _root_ca_cns | difference(_root_ca_cns | unique) | unique | join(', ') }}
+        success_msg: "Nema ponovljenih CN vrednosti."
+      when: role_root_ca_issued_certs | length > 0
+
+    # -----------------------------------------------------------------
+    # 2. Zavisnosti i folderi
+    # -----------------------------------------------------------------
+
+    - name: "Instalacija zavisnosti"
+      ansible.builtin.apt:
+        name: "{{ role_root_ca_dependency_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: role_root_ca_install_dependencies | bool
+
+    # 0700 nad korenom i private folderom: sadrzaj ne sme biti citljiv
+    # nijednom nalogu osim root-a.
+    - name: "Kreiranje foldera CA"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ role_root_ca_dir }}", mode: '0700' }
+        - { path: "{{ _root_ca_private_dir }}", mode: '0700' }
+        - { path: "{{ _root_ca_certs_dir }}", mode: '0755' }
+        - { path: "{{ _root_ca_csr_dir }}", mode: '0755' }
+      loop_control:
+        label: "{{ item.path }}"
+
+    # -----------------------------------------------------------------
+    # 3. Kljuc CA
+    # -----------------------------------------------------------------
+
+    - name: "Kljuc Root CA"
+      community.crypto.openssl_privatekey:
+        path: "{{ _root_ca_key }}"
+        type: "{{ role_root_ca_key_type }}"
+        size: "{{ role_root_ca_key_size if role_root_ca_key_type == 'RSA' else omit }}"
+        curve: "{{ role_root_ca_key_curve if role_root_ca_key_type == 'ECC' else omit }}"
+        regenerate: "{{ role_root_ca_key_regenerate }}"
+        owner: root
+        group: root
+        mode: '0600'
+        backup: true
+      no_log: true
+
+    # -----------------------------------------------------------------
+    # 4. Identitet postojeceg CA
+    # -----------------------------------------------------------------
+    # Ide PRE upisa sertifikata. Modul x509_certificate bi sa
+    # promenjenim subject poljima uredno napravio nov CA sertifikat i
+    # oborio lancanje svih ranije izdatih — bez ijedne poruke.
+
+    - name: "Provera da li CA sertifikat vec postoji"
+      ansible.builtin.stat:
+        path: "{{ _root_ca_crt }}"
+      register: _root_ca_crt_stat
+      changed_when: false
+
+    - name: "Citanje postojeceg CA sertifikata"
+      community.crypto.x509_certificate_info:
+        path: "{{ _root_ca_crt }}"
+        valid_at:
+          upozorenje: "+{{ role_root_ca_warn_before_days }}d"
+      register: _root_ca_existing
+      when: _root_ca_crt_stat.stat.exists
+
+    - name: "Potvrda da se identitet CA nije promenio"
+      ansible.builtin.assert:
+        that:
+          - _root_ca_existing.subject.commonName | default('') == role_root_ca_common_name
+        fail_msg: >-
+          Postojeci CA glasi na '{{ _root_ca_existing.subject.commonName | default("nepoznato") }}',
+          a konfiguracija trazi '{{ role_root_ca_common_name }}'.
+          Promena bi napravila nov CA i svi ranije izdati sertifikati
+          prestali bi da se lancaju. Ako je zamena CA zaista namera,
+          arhiviraj {{ role_root_ca_dir }} i obrisi ga rucno, pa
+          pokreni rolu ponovo.
+        success_msg: "Identitet CA nepromenjen."
+      when: _root_ca_crt_stat.stat.exists
+
+    # -----------------------------------------------------------------
+    # 5. Sertifikat CA
+    # -----------------------------------------------------------------
+    # use_common_name_for_san se iskljucuje: SAN na CA sertifikatu nema
+    # smisla i pokoji klijent ga tumaci kao ogranicenje.
+    #
+    # pathlen:0 znaci da ovaj CA moze potpisivati samo krajnje
+    # sertifikate, ne i posredne CA. Uze ovlascenje nego sto je
+    # potrebno je bolje polaziste.
+
+    - name: "CSR za Root CA"
+      community.crypto.openssl_csr:
+        path: "{{ _root_ca_csr }}"
+        privatekey_path: "{{ _root_ca_key }}"
+        subject: "{{ _root_ca_subject }}"
+        use_common_name_for_san: false
+        basic_constraints:
+          - 'CA:TRUE'
+          - 'pathlen:0'
+        basic_constraints_critical: true
+        key_usage:
+          - keyCertSign
+          - cRLSign
+          - digitalSignature
+        key_usage_critical: true
+        create_subject_key_identifier: true
+        digest: "{{ role_root_ca_digest }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "Sertifikat Root CA"
+      community.crypto.x509_certificate:
+        path: "{{ _root_ca_crt }}"
+        csr_path: "{{ _root_ca_csr }}"
+        privatekey_path: "{{ _root_ca_key }}"
+        provider: selfsigned
+        selfsigned_not_after: "+{{ role_root_ca_days }}d"
+        selfsigned_digest: "{{ role_root_ca_digest }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      register: _root_ca_cert_result
+
+    # -----------------------------------------------------------------
+    # 6. Istek CA
+    # -----------------------------------------------------------------
+    # Namerno samo upozorenje. Obnova root sertifikata trazi ponovnu
+    # distribuciju na sve klijente i ne sme se desiti kao sporedni
+    # efekat pokretanja playbook-a.
+
+    - name: "UPOZORENJE: Root CA uskoro istice"
+      ansible.builtin.debug:
+        msg: >-
+          Root CA '{{ role_root_ca_common_name }}' istice
+          {{ _root_ca_existing.not_after }}, sto je unutar narednih
+          {{ role_root_ca_warn_before_days }} dana. Obnova trazi
+          ponovnu distribuciju CA sertifikata na sve klijente —
+          isplaniraj je na vreme.
+      when:
+        - _root_ca_crt_stat.stat.exists
+        - not (_root_ca_existing.valid_at.upozorenje | default(true))
+
+    # -----------------------------------------------------------------
+    # 7. Poverenje na ovom hostu
+    # -----------------------------------------------------------------
+    # Odnosi se samo na host koji vodi CA. Ostali hostovi poverenje
+    # dobijaju zasebno, distribucijom ca.crt.
+
+    - name: "Upis CA u sistemski trust store"
+      ansible.builtin.copy:
+        src: "{{ _root_ca_crt }}"
+        dest: "{{ _root_ca_trust_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      notify: "azuriranje sistemskog trust store-a"
+      when: role_root_ca_trust_local | bool
+
+    # -----------------------------------------------------------------
+    # 8. Izdavanje sertifikata
+    # -----------------------------------------------------------------
+    # Zaseban fajl, jer po sertifikatu ide sest koraka koji moraju ici
+    # redom. Sest paralelnih petlji nad istom listom bilo bi krace, ali
+    # neuporedivo teze za citanje.
+
+    - name: "Izdavanje sertifikata"
+      ansible.builtin.include_tasks: issue.yml
+      loop: "{{ role_root_ca_issued_certs }}"
+      loop_control:
+        loop_var: cert
+        label: "{{ cert.cn }}"
+
+    # -----------------------------------------------------------------
+    # 9. Preuzimanje na kontrolni cvor
+    # -----------------------------------------------------------------
+    # Kljuc samog CA se ne preuzima nikada — on ostaje na jednom mestu.
+
+    - name: "Preuzimanje CA sertifikata"
+      ansible.builtin.fetch:
+        src: "{{ _root_ca_crt }}"
+        dest: "{{ role_root_ca_fetch_dir }}/{{ role_root_ca_basename }}.crt"
+        flat: true
+      when: role_root_ca_fetch_enabled | bool
+
+  when: role_root_ca_enabled | default(false) | bool
