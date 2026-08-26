@@ -1,0 +1,191 @@
+---
+# roles/root_ca/tasks/issue.yml
+#
+# Izdavanje jednog sertifikata. Poziva se iz tasks/main.yml petljom
+# nad role_root_ca_issued_certs; tekuci unos je u varijabli "cert".
+#
+# Tok:
+#   1. Izvedena imena i putanje
+#   2. Uklanjanje (state: absent)
+#   3. Privatni kljuc
+#   4. CSR
+#   5. Provera isteka -> odluka o obnovi
+#   6. Sertifikat
+#   7. fullchain i preuzimanje
+
+# ---------------------------------------------------------------------
+# 1. Imena i putanje
+# ---------------------------------------------------------------------
+# Zvezdica u imenu wildcard sertifikata nije upotrebljiva u imenu
+# fajla, pa se zamenjuje recju "wildcard". Sve ostalo sto nije slovo,
+# cifra, tacka, crta ili donja crta postaje donja crta.
+
+- name: "Izvedena imena za {{ cert.cn }}"
+  ansible.builtin.set_fact:
+    _rc_name: >-
+      {{ cert.filename | default(
+           cert.cn | regex_replace('^\*', 'wildcard')
+                   | regex_replace('[^A-Za-z0-9._-]', '_')) }}
+    _rc_type: "{{ cert.key_type | default(role_root_ca_cert_key_type) }}"
+    _rc_days: "{{ cert.days | default(role_root_ca_cert_days) }}"
+    _rc_state: "{{ cert.state | default('present') }}"
+
+- name: "Izvedene putanje za {{ cert.cn }}"
+  ansible.builtin.set_fact:
+    _rc_key: "{{ _root_ca_private_dir }}/{{ _rc_name }}.key"
+    _rc_csr: "{{ _root_ca_csr_dir }}/{{ _rc_name }}.csr"
+    _rc_crt: "{{ _root_ca_certs_dir }}/{{ _rc_name }}.crt"
+    _rc_chain: "{{ _root_ca_certs_dir }}/{{ _rc_name }}-fullchain.crt"
+
+# Klijenti od Chrome 58 i ekvivalentnih verzija ostalih pregledaca
+# potpuno ignorisu Common Name i gledaju iskljucivo SAN. Sertifikat
+# bez SAN unosa za sopstveni CN bio bi odbijen, a greska ("common name
+# invalid") ne upucuje na uzrok.
+- name: "Sastavljanje SAN liste za {{ cert.cn }}"
+  ansible.builtin.set_fact:
+    _rc_sans: >-
+      {{ ([(('IP:' ~ cert.cn) if cert.cn is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+             else ('DNS:' ~ cert.cn))]
+          + (cert.sans | default([]))) | unique | list }}
+
+# ---------------------------------------------------------------------
+# 2. Uklanjanje
+# ---------------------------------------------------------------------
+# Sertifikat se ne povlaci (rola ne vodi CRL), samo se brisu fajlovi.
+# Do isteka ostaje tehnicki validan ako ga neko vec ima.
+
+- name: "Uklanjanje sertifikata {{ cert.cn }}"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ _rc_key }}"
+    - "{{ _rc_csr }}"
+    - "{{ _rc_crt }}"
+    - "{{ _rc_chain }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  when: _rc_state == 'absent'
+
+# ---------------------------------------------------------------------
+# 3-7. Izdavanje
+# ---------------------------------------------------------------------
+
+- name: "Izdavanje sertifikata {{ cert.cn }}"
+  when: _rc_state == 'present'
+  block:
+
+    # Obnova zadrzava postojeci kljuc — regenerate: never. Nov kljuc
+    # bi znacio da se i on mora ponovo distribuirati, sto obnovu
+    # pretvara iz rutine u zahvat.
+    - name: "Privatni kljuc za {{ cert.cn }}"
+      community.crypto.openssl_privatekey:
+        path: "{{ _rc_key }}"
+        type: "{{ _rc_type }}"
+        size: "{{ cert.key_size | default(role_root_ca_cert_key_size) if _rc_type == 'RSA' else omit }}"
+        curve: "{{ cert.key_curve | default(role_root_ca_cert_key_curve) if _rc_type == 'ECC' else omit }}"
+        regenerate: never
+        owner: "{{ cert.owner | default(role_root_ca_cert_owner) }}"
+        group: "{{ cert.group | default(role_root_ca_cert_group) }}"
+        mode: "{{ cert.key_mode | default(role_root_ca_cert_key_mode) }}"
+      no_log: true
+
+    - name: "CSR za {{ cert.cn }}"
+      community.crypto.openssl_csr:
+        path: "{{ _rc_csr }}"
+        privatekey_path: "{{ _rc_key }}"
+        subject: >-
+          {{ (_root_ca_subject_base if role_root_ca_cert_subject_from_ca | bool else {})
+             | combine({'CN': cert.cn}) }}
+        subject_alt_name: "{{ _rc_sans }}"
+        use_common_name_for_san: false
+        basic_constraints:
+          - 'CA:FALSE'
+        basic_constraints_critical: true
+        key_usage: "{{ cert.key_usage | default(role_root_ca_cert_key_usage) }}"
+        key_usage_critical: true
+        extended_key_usage: >-
+          {{ cert.extended_key_usage | default(role_root_ca_cert_extended_key_usage) }}
+        create_subject_key_identifier: true
+        digest: "{{ role_root_ca_digest }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    # x509_certificate poredi sertifikat sa CSR-om, ali ne i datum
+    # isteka. Bez ove provere sertifikat bi tiho istekao i rola bi i
+    # dalje prijavljivala ok.
+    - name: "Provera da li sertifikat {{ cert.cn }} postoji"
+      ansible.builtin.stat:
+        path: "{{ _rc_crt }}"
+      register: _rc_stat
+      changed_when: false
+
+    - name: "Provera isteka sertifikata {{ cert.cn }}"
+      community.crypto.x509_certificate_info:
+        path: "{{ _rc_crt }}"
+        valid_at:
+          obnova: "+{{ role_root_ca_renew_before_days }}d"
+      register: _rc_info
+      when:
+        - _rc_stat.stat.exists
+        - role_root_ca_renew_before_days | int > 0
+
+    - name: "Sertifikat {{ cert.cn }}"
+      community.crypto.x509_certificate:
+        path: "{{ _rc_crt }}"
+        csr_path: "{{ _rc_csr }}"
+        provider: ownca
+        ownca_path: "{{ _root_ca_crt }}"
+        ownca_privatekey_path: "{{ _root_ca_key }}"
+        ownca_not_after: "+{{ _rc_days }}d"
+        ownca_not_before: "+0s"
+        ownca_digest: "{{ role_root_ca_digest }}"
+        ownca_create_subject_key_identifier: always_create
+        ownca_create_authority_key_identifier: true
+        force: >-
+          {{ _rc_stat.stat.exists
+             and role_root_ca_renew_before_days | int > 0
+             and not (_rc_info.valid_at.obnova | default(true)) }}
+        owner: "{{ cert.owner | default(role_root_ca_cert_owner) }}"
+        group: "{{ cert.group | default(role_root_ca_cert_group) }}"
+        mode: "{{ cert.mode | default(role_root_ca_cert_mode) }}"
+        backup: true
+
+    # Nginx trazi sertifikat i lanac u jednom fajlu; Apache koristi
+    # odvojene. Fajl se sastavlja kroz slurp umesto "cat a b > c" da bi
+    # ostao idempotentan — copy poredi sadrzaj.
+    - name: "Citanje sertifikata {{ cert.cn }} za fullchain"
+      ansible.builtin.slurp:
+        src: "{{ _rc_crt }}"
+      register: _rc_crt_content
+      when: role_root_ca_fullchain | bool
+
+    - name: "Citanje CA sertifikata za fullchain"
+      ansible.builtin.slurp:
+        src: "{{ _root_ca_crt }}"
+      register: _rc_ca_content
+      when: role_root_ca_fullchain | bool
+
+    - name: "Upis {{ _rc_name }}-fullchain.crt"
+      ansible.builtin.copy:
+        content: >-
+          {{ (_rc_crt_content.content | b64decode) ~ (_rc_ca_content.content | b64decode) }}
+        dest: "{{ _rc_chain }}"
+        owner: "{{ cert.owner | default(role_root_ca_cert_owner) }}"
+        group: "{{ cert.group | default(role_root_ca_cert_group) }}"
+        mode: "{{ cert.mode | default(role_root_ca_cert_mode) }}"
+      when: role_root_ca_fullchain | bool
+
+    - name: "Preuzimanje sertifikata {{ cert.cn }} na kontrolni cvor"
+      ansible.builtin.fetch:
+        src: "{{ item }}"
+        dest: "{{ role_root_ca_fetch_dir }}/{{ item | basename }}"
+        flat: true
+      loop:
+        - "{{ _rc_crt }}"
+        - "{{ _rc_key }}"
+      loop_control:
+        label: "{{ item | basename }}"
+      when: role_root_ca_fetch_enabled | bool
+      no_log: true
