@@ -1,26 +1,40 @@
 ---
 # roles/zabbix_db/defaults/main.yml
 #
-# Rola "zabbix_db" instalira bazu podataka i priprema je za Zabbix
-# server.
+# Rola "zabbix_db" instalira MySQL, priprema bazu za Zabbix server,
+# uvozi semu i kreira naloge.
 #
 # Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_db],
 # koja kroz group_vars/deploy_zabbix_db.yml postavlja
 # role_zabbix_db_enabled.
 #
 # PODELA POSLA SA ROLOM zabbix_server:
-#   zabbix_db      — instalira bazu, kreira PRAZNU bazu i korisnike
-#   zabbix_server  — uvozi semu (skripte dolaze uz njegov paket)
+#   zabbix_db      — MySQL, baza, UVOZ SEME, naloge
+#   zabbix_server  — instalira i konfigurise servis
 #
-# Rola NE uvozi semu i NE dira postojece podatke. Bezbedno je
-# pokrenuti je ponovo nad vec podesenom bazom.
+# Uvoz seme je RANIJE bio u roli zabbix_server i nije radio: skripta
+# se izvrsavala kao korisnik "zabbix", koji ima privilegije samo nad
+# svojom bazom. Zabbix sema sadrzi CREATE FUNCTION naredbe, a MySQL
+# 8.0 sa ukljucenim binarnim logom ih odbija bez globalne opcije
+# log_bin_trust_function_creators — koju "zabbix" ne sme da menja.
+#
+# Ovde uvoz radi zato sto rola bazi pristupa lokalno, kao root kroz
+# unix socket. Root na Ubuntu koristi auth_socket dodatak, ima punu
+# privilegiju i moze da ukljuci pomenutu opciju za trajanje uvoza.
+#
+# POSLEDICA: uvoz seme zahteva da rola radi NA HOSTU BAZE. Za bazu
+# na udaljenom hostu, stavi taj host u grupu [deploy_zabbix_db].
 #
 # =====================================================================
 # UPOZORENJE
 # =====================================================================
-# Instalacija baze na host koji vec ima MySQL/MariaDB moze izmeniti
-# konfiguraciju kroz fajl 99-zabbix.cnf. Ako na hostu radi druga
-# aplikacija koja koristi istu bazu, proveri podesavanja pre primene.
+# 1. Instalacija MySQL-a na host koji vec ima bazu menja konfiguraciju
+#    kroz fajl zz-zabbix.cnf. Ako na hostu radi druga aplikacija nad
+#    istom instancom, proveri podesavanja pre primene.
+#
+# 2. Uvoz seme je jednokratna, nepovratna operacija. Rola proverava
+#    da li sema vec postoji i preskace uvoz ako jeste, ali prvi uvoz
+#    nad pogresnom bazom se ne moze ponistiti.
 # =====================================================================
 
 
@@ -32,20 +46,17 @@ role_zabbix_db_enabled: false
 
 
 # =====================================================================
-# IZBOR MOTORA
+# INSTALACIJA
 # =====================================================================
-# mysql   — MySQL Community Server (podrazumevano)
-# mariadb — MariaDB
+# Rola podrzava iskljucivo MySQL Community Server. MariaDB nije
+# podrzana — imena paketa, foldera za konfiguraciju i ponasanje oko
+# kolacija se razlikuju dovoljno da bi jedan kod pokrivao oba samo
+# prividno.
 #
-# Oba rade sa Zabbix-om. MariaDB je uobicajen izbor na Debianu,
-# MySQL na Ubuntu. Izbor odredjuje ime paketa, servisa i foldera za
-# konfiguraciju — rola ih sama izvodi.
-#
-role_zabbix_db_engine: mysql
-
-# Kada je false, rola preskace instalaciju paketa i samo kreira bazu
-# i korisnike. Koristi kada bazom upravlja neko drugi ili kada je
-# vec instalirana.
+# Kada je false, rola preskace instalaciju paketa i samo kreira bazu,
+# uvozi semu i pravi naloge. Koristi kada je MySQL vec instaliran
+# nekim drugim putem. Baza i dalje mora biti LOKALNA — rola se
+# prijavljuje kroz unix socket.
 #
 role_zabbix_db_install_server: true
 
@@ -62,39 +73,27 @@ role_zabbix_db_name: zabbix
 # =====================================================================
 # Ovaj nalog koristi Zabbix SERVER i dobija ALL na svojoj bazi. To je
 # vise nego sto server treba u svakodnevnom radu, ali je neophodno za
-# uvoz seme i za nadogradnju baze pri prelasku na noviju verziju
-# Zabbix-a.
+# nadogradnju baze pri prelasku na noviju verziju Zabbix-a.
 #
-role_zabbix_db_user: zabbix
+role_zabbix_db_server_user: zabbix
 
 # OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
 #
 # Mora biti ISTA kao role_zabbix_server_db_password u roli
-# zabbix_server. Najlakse je definisati je jednom:
+# zabbix_server. Najlakse je definisati je jednom, u host_vars, pa
+# referencirati iz svih rola koje je koriste:
 #
 #   host_vars/srv-mon-01.yml
-#     _zabbix_db_pass: !vault |
-#       $ANSIBLE_VAULT;1.1;AES256
-#       62313436...
+#     _zabbix_db_pass: "izaberi-dugacku-lozinku"
+#
 #     role_zabbix_db_password: "{{ _zabbix_db_pass }}"
 #     role_zabbix_server_db_password: "{{ _zabbix_db_pass }}"
 #
-# Lozinku sifruj sa:
-#   ansible-vault encrypt_string 'lozinka' --name '_zabbix_db_pass'
+# host_vars zivi na kontrolnom cvoru, van git repozitorijuma, pa
+# lozinka nikada ne ulazi u istoriju verzija. Fajl treba da ima
+# dozvole 0600.
 #
 role_zabbix_db_password: ""
-
-# Sa kog hosta se korisnik sme prijaviti — JEDNA vrednost.
-#
-#   localhost      — baza i server na istom hostu (podrazumevano)
-#   10.0.0.50      — Zabbix server na drugom hostu
-#   10.0.0.%       — cela podmreza
-#   %              — bilo odakle (NE preporucuje se)
-#
-# Zadrzano zbog kompatibilnosti sa ranijim podesavanjima. Koristi se
-# SAMO ako je role_zabbix_db_server_user_hosts prazna lista.
-#
-role_zabbix_db_user_host: localhost
 
 # Lista hostova sa kojih se Zabbix SERVER sme prijaviti na bazu.
 #
@@ -103,17 +102,23 @@ role_zabbix_db_user_host: localhost
 # hesom lozinke. Rola pravi po jedan nalog za svaku stavku liste,
 # sa istom lozinkom i istim privilegijama.
 #
-# Ima prednost nad role_zabbix_db_user_host kada nije prazna. Korisno
-# kada postoji vise Zabbix servera nad istom bazom, ili kada se
-# server seli na drugu adresu pa obe moraju vaziti tokom prelaza:
+#   localhost      — baza i server na istom hostu (podrazumevano)
+#   10.0.0.50      — Zabbix server na drugom hostu
+#   10.0.0.%       — cela podmreza
+#   %              — bilo odakle (NE preporucuje se)
 #
-#   role_zabbix_db_server_user_hosts:
+# Vise stavki je korisno kada postoji vise Zabbix servera nad istom
+# bazom, ili kada se server seli na drugu adresu pa obe moraju vaziti
+# tokom prelaza:
+#
+#   role_zabbix_db_server_hosts:
 #     - "10.0.0.50"
 #     - "10.0.0.51"
 #
 # Za frontend NE koristi ovu listu — on ima sopstveni nalog nize.
 #
-role_zabbix_db_server_user_hosts: []
+role_zabbix_db_server_hosts:
+  - localhost
 
 
 # =====================================================================
@@ -129,9 +134,10 @@ role_zabbix_db_server_user_hosts: []
 #
 role_zabbix_db_frontend_enabled: false
 
-# Ime naloga. Mora se razlikovati od role_zabbix_db_user — rola to
-# proverava. Isto ime sa razlicitim pravima po hostu je dozvoljeno u
-# MySQL-u, ali se iz poruke o gresci ne vidi koji je nalog upotrebljen.
+# Ime naloga. Mora se razlikovati od role_zabbix_db_server_user —
+# rola to proverava. Isto ime sa razlicitim pravima po hostu je
+# dozvoljeno u MySQL-u, ali se iz poruke o gresci ne vidi koji je
+# nalog upotrebljen.
 #
 role_zabbix_db_frontend_user: zabbix_web
 
@@ -144,12 +150,12 @@ role_zabbix_db_frontend_user: zabbix_web
 role_zabbix_db_frontend_password: ""
 
 # OBAVEZNO kada je role_zabbix_db_frontend_enabled true.
-# Lista, po istom pravilu kao role_zabbix_db_server_user_hosts.
+# Lista, po istom pravilu kao role_zabbix_db_server_hosts.
 #
-#   role_zabbix_db_frontend_user_hosts:
+#   role_zabbix_db_frontend_hosts:
 #     - "10.0.0.60"
 #
-role_zabbix_db_frontend_user_hosts: []
+role_zabbix_db_frontend_hosts: []
 
 # Privilegije frontenda nad bazom.
 #
@@ -162,6 +168,40 @@ role_zabbix_db_frontend_user_hosts: []
 # pokrivene.
 #
 role_zabbix_db_frontend_priv: "SELECT,INSERT,UPDATE,DELETE"
+
+
+# =====================================================================
+# UVOZ SEME
+# =====================================================================
+# Sema dolazi iz paketa zabbix-sql-scripts, koji je u Zabbix
+# repozitorijumu — host mora biti i u grupi [apply_repos], a
+# apply_repos mora ici PRE deploy_zabbix_db u playbook.yml.
+#
+# Uvoz se radi samo jednom. Provera se svodi na pitanje da li u bazi
+# postoji tabela "dbversion"; ako postoji, uvoz se preskace.
+#
+role_zabbix_db_schema_import: true
+
+# Zakovana verzija paketa zabbix-sql-scripts. Prazna vrednost
+# instalira najnoviju iz repozitorijuma.
+#
+# Verzija seme mora odgovarati verziji Zabbix servera. Ako je server
+# zakovan kroz role_zabbix_server_version, zakuj i ovo na istu
+# vrednost:
+#
+#   role_zabbix_db_sql_scripts_version: "1:7.0.19-1+ubuntu24.04"
+#
+role_zabbix_db_sql_scripts_version: ""
+
+# MySQL 8.0 sa ukljucenim binarnim logom odbija CREATE FUNCTION od
+# korisnika bez SUPER privilegije, a Zabbix sema takve naredbe
+# sadrzi. Rola opciju privremeno ukljucuje pre uvoza i vraca je na
+# zatecenu vrednost posle.
+#
+# Postavi na false samo ako opcijom upravljas sam, kroz
+# role_zabbix_db_extra_config.
+#
+role_zabbix_db_log_bin_trust: true
 
 
 # =====================================================================
@@ -228,9 +268,12 @@ role_zabbix_db_innodb_flush_log_at_trx_commit: 2
 role_zabbix_db_max_connections: 200
 
 # Najveci pojedinacni upit koji baza prihvata.
+#
+# Uvoz seme salje velike naredbe; ispod 32M uvoz moze puci sa
+# porukom "MySQL server has gone away".
 role_zabbix_db_max_allowed_packet: 64M
 
-# Proizvoljne linije koje se dodaju u 99-zabbix.cnf.
+# Proizvoljne linije koje se dodaju u zz-zabbix.cnf.
 #
 #   role_zabbix_db_extra_config: |
 #     innodb_io_capacity = 2000
