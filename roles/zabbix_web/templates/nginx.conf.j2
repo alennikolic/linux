@@ -2,7 +2,11 @@
 {{ '#' }}
 {{ '#' }} UPRAVLJA ANSIBLE ROLA: zabbix_web
 {{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+{% if role_zabbix_web_https_enabled | bool and role_zabbix_web_http_redirect | bool %}
 
+{{ '#' }} =====================================================================
+{{ '#' }} HTTP — samo preusmeravanje na HTTPS
+{{ '#' }} =====================================================================
 server {
 {% if role_zabbix_web_listen_address | length > 0 %}
         listen {{ role_zabbix_web_listen_address }}:{{ role_zabbix_web_listen_port }};
@@ -10,6 +14,58 @@ server {
         listen {{ role_zabbix_web_listen_port }};
 {% endif %}
         server_name {{ role_zabbix_web_hostname }};
+
+{{ '#' }}       $host je ime bez porta, pa se port dodaje samo kada nije
+{{ '#' }}       standardni 443.
+        return 301 https://$host{% if role_zabbix_web_https_port | int != 443 %}:{{ role_zabbix_web_https_port }}{% endif %}$request_uri;
+}
+{% endif %}
+
+{{ '#' }} =====================================================================
+{{ '#' }} Zabbix frontend
+{{ '#' }} =====================================================================
+server {
+{% if role_zabbix_web_https_enabled | bool %}
+{% if role_zabbix_web_listen_address | length > 0 %}
+        listen {{ role_zabbix_web_listen_address }}:{{ role_zabbix_web_https_port }} ssl{% if role_zabbix_web_http2 | bool and not (_zabbix_web_http2_new_syntax | bool) %} http2{% endif %};
+{% else %}
+        listen {{ role_zabbix_web_https_port }} ssl{% if role_zabbix_web_http2 | bool and not (_zabbix_web_http2_new_syntax | bool) %} http2{% endif %};
+{% endif %}
+{% if role_zabbix_web_http2 | bool and _zabbix_web_http2_new_syntax | bool %}
+        http2 on;
+{% endif %}
+{% else %}
+{% if role_zabbix_web_listen_address | length > 0 %}
+        listen {{ role_zabbix_web_listen_address }}:{{ role_zabbix_web_listen_port }};
+{% else %}
+        listen {{ role_zabbix_web_listen_port }};
+{% endif %}
+{% endif %}
+        server_name {{ role_zabbix_web_hostname }};
+{% if role_zabbix_web_https_enabled | bool %}
+
+{{ '#' }}       --- TLS ------------------------------------------------
+{{ '#' }}       Sertifikat treba da bude pun lanac: prvo sertifikat
+{{ '#' }}       hosta, pa sertifikat izdavaoca.
+        ssl_certificate     {{ role_zabbix_web_tls_cert }};
+        ssl_certificate_key {{ role_zabbix_web_tls_key }};
+
+        ssl_protocols {{ role_zabbix_web_tls_protocols }};
+        ssl_ciphers {{ role_zabbix_web_tls_ciphers }};
+
+{{ '#' }}       Uz moderan spisak sifri klijent bira bolje od servera.
+        ssl_prefer_server_ciphers off;
+
+        ssl_session_cache shared:ZabbixTLS:10m;
+        ssl_session_timeout 1d;
+        ssl_session_tickets off;
+{% if role_zabbix_web_hsts_enabled | bool %}
+
+{{ '#' }}       HSTS — pretrazivac ovo pamti i ne moze se povuci
+{{ '#' }}       gasenjem opcije na serveru.
+        add_header Strict-Transport-Security "max-age={{ role_zabbix_web_hsts_max_age }}" always;
+{% endif %}
+{% endif %}
 
         root /usr/share/zabbix;
 
@@ -38,7 +94,7 @@ server {
         }
 
         location ~ [^/]\.php(/|$) {
-                fastcgi_pass    unix:/run/php/zabbix.sock;
+                fastcgi_pass    unix:{{ _zabbix_web_php_socket }};
                 fastcgi_split_path_info ^(.+\.php)(/.+)$;
                 fastcgi_index   index.php;
 
@@ -51,6 +107,13 @@ server {
                 fastcgi_param   REQUEST_METHOD  $request_method;
                 fastcgi_param   CONTENT_TYPE    $content_type;
                 fastcgi_param   CONTENT_LENGTH  $content_length;
+{% if role_zabbix_web_https_enabled | bool %}
+
+{{ '#' }}               Bez ovoga PHP ne zna da je veza sifrovana, pa
+{{ '#' }}               Zabbix ne postavlja "secure" zastavicu na kolacic
+{{ '#' }}               sesije.
+                fastcgi_param   HTTPS           on;
+{% endif %}
 
                 fastcgi_intercept_errors        on;
                 fastcgi_ignore_client_abort     off;
@@ -62,4 +125,9 @@ server {
                 fastcgi_busy_buffers_size       256k;
                 fastcgi_temp_file_write_size    256k;
         }
+{% if role_zabbix_web_nginx_extra_config | length > 0 %}
+
+{{ '#' }}       --- Dodatna konfiguracija ------------------------------
+        {{ role_zabbix_web_nginx_extra_config | indent(8) }}
+{% endif %}
 }
