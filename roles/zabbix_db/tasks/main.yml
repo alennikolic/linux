@@ -50,15 +50,15 @@
 
     # Ako se ovde omakne string umesto liste, mysql_user bi prosao
     # kroz svaki KARAKTER stringa kao kroz zaseban host.
-    - name: "Provera da je role_zabbix_db_user_hosts lista"
+    - name: "Provera da je role_zabbix_db_server_user_hosts lista"
       ansible.builtin.assert:
         that:
-          - role_zabbix_db_user_hosts | type_debug == 'list'
+          - role_zabbix_db_server_user_hosts | type_debug == 'list'
         fail_msg: >-
-          role_zabbix_db_user_hosts mora biti lista, a zadato je
-          {{ role_zabbix_db_user_hosts | type_debug }}. Za jednu
+          role_zabbix_db_server_user_hosts mora biti lista, a zadato je
+          {{ role_zabbix_db_server_user_hosts | type_debug }}. Za jednu
           adresu napisi listu sa jednom stavkom.
-        success_msg: "role_zabbix_db_user_hosts je lista."
+        success_msg: "role_zabbix_db_server_user_hosts je lista."
 
     # Pogresna kolacija se otkriva tek kada frontend prijavi gresku,
     # dugo posle uvoza seme. Zato provera ide unapred.
@@ -168,7 +168,7 @@
         priv: "{{ role_zabbix_db_name }}.*:ALL"
         state: present
         login_unix_socket: "{{ _zabbix_db_login_socket }}"
-      loop: "{{ _zabbix_db_user_hosts }}"
+      loop: "{{ _zabbix_db_server_user_hosts }}"
       no_log: true
 
     # -----------------------------------------------------------------
