@@ -3,10 +3,6 @@
 #
 # Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
 # group_vars ili host_vars.
-#
-# Posle prelaska na iskljucivo Nginx ovde vise nema uslovnih izraza —
-# sve vrednosti su fiksne. Fajl ostaje jer putanje i imena paketa
-# nisu podesavanja i nemaju sta da traze u defaults/main.yml.
 
 _zabbix_web_frontend_package: zabbix-frontend-php
 _zabbix_web_conf_package: zabbix-nginx-conf
@@ -21,3 +17,29 @@ _zabbix_web_config_file: /etc/zabbix/web/zabbix.conf.php
 
 # PHP-FPM socket iz pool-a koji dolazi uz zabbix-nginx-conf.
 _zabbix_web_php_socket: /run/php/zabbix.sock
+
+# CSR za self-signed sertifikat. Ime se izvodi iz putanje kljuca
+# zamenom ekstenzije, da bi pratilo eventualnu izmenu te putanje.
+_zabbix_web_tls_csr: >-
+  {{ role_zabbix_web_tls_key | regex_replace('\.[^./]+$', '') }}.csr
+
+# Subject self-signed sertifikata. Prazna polja se izbacuju —
+# openssl_csr bi ih inace upisao kao prazne atribute.
+_zabbix_web_tls_subject: >-
+  {{ {
+       'CN': role_zabbix_web_tls_selfsigned_cn,
+       'O':  role_zabbix_web_tls_selfsigned_org,
+     }
+     | dict2items | rejectattr('value', 'equalto', '') | items2dict }}
+
+# SAN lista. Unos za sam CN se dodaje automatski: kao IP: kada je CN
+# IPv4 adresa, inace kao DNS:.
+#
+# Izraz je namerno jedan Jinja izraz u presavijenom bloku — Ansible
+# cuva tip vrednosti (listu) samo u tom obliku. Razbijen na vise
+# izraza rezultat bi bio string.
+_zabbix_web_tls_sans: >-
+  {{ ([(('IP:' ~ role_zabbix_web_tls_selfsigned_cn)
+         if role_zabbix_web_tls_selfsigned_cn is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+         else ('DNS:' ~ role_zabbix_web_tls_selfsigned_cn))]
+      + role_zabbix_web_tls_selfsigned_sans) | unique | list }}
