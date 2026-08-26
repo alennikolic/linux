@@ -1,0 +1,282 @@
+---
+# roles/root_ca/defaults/main.yml
+#
+# Rola "root_ca" vodi lokalni Certificate Authority i izdaje serverske
+# sertifikate potpisane njime. Namenjena je internoj infrastrukturi —
+# monitoring, interni web servisi, API-ji — gde javni CA nije potreban.
+#
+# Aktivacija ide preko clanstva hosta u grupi [deploy_root_ca], koja
+# kroz group_vars/deploy_root_ca.yml postavlja role_root_ca_enabled.
+#
+# Parametre menjaj u:
+#   group_vars/all.yml        — globalno
+#   host_vars/<host>.yml      — za pojedinacan host
+#
+#
+# PAZNJA — NEPOVRATNE POSLEDICE:
+#
+#   Privatni kljuc CA je najosetljiviji podatak u okruzenju. Ko dodje
+#   do njega moze izdati sertifikat za bilo koje ime kojem ovi sistemi
+#   veruju. Folder je 0700, kljuc 0600, i ne izlazi sa hosta osim ako
+#   se to izricito ne trazi (role_root_ca_fetch_enabled).
+#
+#   Ako se CA kljuc ili subject polja promene, SVI ranije izdati
+#   sertifikati prestaju da se lancaju do njega. Rola to ne dozvoljava
+#   tiho — poredi konfiguraciju sa postojecim CA i prekida rad ako se
+#   razlikuju.
+#
+#   Rola treba da se izvrsava na TACNO JEDNOM hostu. Vise hostova u
+#   grupi znaci vise medjusobno nepovezanih CA.
+#
+#
+# ZAVISNOST: moduli iz kolekcije community.crypto.
+#
+#   ansible-galaxy collection install community.crypto
+#
+# Na ciljnom hostu je potrebna Python biblioteka cryptography; rola je
+# instalira sama (role_root_ca_install_dependencies).
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+# Kada je false, rola ne dira nista.
+#
+role_root_ca_enabled: false
+
+
+# =====================================================================
+# LOKACIJA
+# =====================================================================
+# Struktura koju rola pravi:
+#
+#   <dir>/private/   0700   kljucevi (CA i izdati)
+#   <dir>/certs/     0755   sertifikati
+#   <dir>/csr/       0755   zahtevi za potpisivanje
+#
+role_root_ca_dir: /root/ca
+
+# Osnovno ime CA fajlova, bez ekstenzije:
+#   <dir>/private/ca.key
+#   <dir>/certs/ca.crt
+#
+role_root_ca_basename: ca
+
+
+# =====================================================================
+# IDENTITET CA
+# =====================================================================
+# Prazna polja se ne upisuju u sertifikat.
+#
+# PAZNJA: ove vrednosti se ne menjaju posle prvog pokretanja. Promena
+# subject polja menja identitet CA — izdati sertifikati vise ne bi
+# imali izdavaca kojem sistemi veruju. Rola prekida rad ako se zadata
+# vrednost razlikuje od one u postojecem sertifikatu.
+#
+# Common Name treba da bude opisan i jedinstven, jer se prikazuje u
+# svakom pregledu sertifikata. Uobicajeno: "<Organizacija> Root CA".
+#
+role_root_ca_common_name: "CHANGEME Root CA"
+role_root_ca_country: ""
+role_root_ca_state_or_province: ""
+role_root_ca_locality: ""
+role_root_ca_organization: "CHANGEME"
+role_root_ca_ou: ""
+
+# Vazenje CA sertifikata u danima. 7300 je oko 20 godina.
+#
+# Duze vazenje znaci redje obnavljanje, ali i duzi period u kojem
+# kompromitovan kljuc ostaje upotrebljiv.
+#
+role_root_ca_days: 7300
+
+# Upozorenje kada CA istice u narednih N dana. Rola ne obnavlja CA
+# sama — obnova root sertifikata trazi ponovnu distribuciju na sve
+# klijente i mora biti svesna odluka.
+#
+role_root_ca_warn_before_days: 90
+
+
+# =====================================================================
+# KLJUC CA
+# =====================================================================
+
+# RSA ili ECC. ECC daje krace kljuceve i brze rukovanje, ali stariji
+# klijenti i pokoji uredjaj ga ne podrzavaju. RSA je bezbedan izbor.
+#
+role_root_ca_key_type: RSA
+
+# Duzina RSA kljuca. Za ECC se ignorise; koristi se
+# role_root_ca_key_curve.
+#
+role_root_ca_key_size: 4096
+
+# Kriva za ECC kljuc.
+#
+role_root_ca_key_curve: secp384r1
+
+# Algoritam potpisa.
+#
+role_root_ca_digest: sha256
+
+# Kada se kljuc ponovo generise:
+#
+#   never             — nikada, i kada se parametri promene
+#   full_idempotence  — kada se ne poklapa sa zadatim tipom i duzinom
+#
+# Podrazumevano je never, namerno. Sa full_idempotence bi promena
+# role_root_ca_key_size sa 4096 na 2048 obrisala postojeci CA kljuc i
+# svi izdati sertifikati bi postali bezvredni.
+#
+role_root_ca_key_regenerate: never
+
+
+# =====================================================================
+# SERTIFIKATI KOJE CA IZDAJE
+# =====================================================================
+# Lista sertifikata. Jedino obavezno polje je cn.
+#
+#   role_root_ca_issued_certs:
+#     - cn: zabbix.example.com
+#
+#     - cn: www.example.com
+#       sans:
+#         - "DNS:www2.example.com"
+#         - "IP:10.0.0.10"
+#       days: 365
+#       owner: www-data
+#       group: www-data
+#
+#     - cn: "*.apps.example.com"
+#       filename: wildcard-apps
+#
+#     - cn: stari.example.com
+#       state: absent
+#
+# Podrzana polja:
+#
+#   cn          — Common Name (obavezno)
+#   state       — present (podrazumevano) ili absent
+#   sans        — dodatni Subject Alternative Name unosi, u formatu
+#                 "DNS:ime" ili "IP:adresa". SAN za sam cn rola dodaje
+#                 sama i ne treba ga navoditi.
+#   filename    — osnovno ime fajlova; podrazumevano se izvodi iz cn
+#   days        — nadjacava role_root_ca_cert_days
+#   key_type    — nadjacava role_root_ca_cert_key_type
+#   key_size    — nadjacava role_root_ca_cert_key_size
+#   owner       — vlasnik kljuca i sertifikata
+#   group       — grupa kljuca i sertifikata
+#   key_mode    — dozvole nad privatnim kljucem
+#   extended_key_usage — nadjacava role_root_ca_cert_extended_key_usage
+#
+role_root_ca_issued_certs: []
+
+
+# ---------------------------------------------------------------------
+# Podrazumevane vrednosti izdatih sertifikata
+# ---------------------------------------------------------------------
+
+# 397 dana je gornja granica koju javni CA i vecina klijenata
+# prihvataju. Interni CA nije obavezan da je postuje, ali krace
+# vazenje ogranicava stetu od procurelog kljuca.
+#
+role_root_ca_cert_days: 397
+
+role_root_ca_cert_key_type: RSA
+role_root_ca_cert_key_size: 2048
+role_root_ca_cert_key_curve: secp256r1
+
+# Namena. serverAuth je dovoljan za TLS server; clientAuth dodaj kada
+# se isti sertifikat koristi i za medjusobnu autentikaciju.
+#
+role_root_ca_cert_extended_key_usage:
+  - serverAuth
+
+role_root_ca_cert_key_usage:
+  - digitalSignature
+  - keyEncipherment
+
+# Preuzimanje C, ST, L, O i OU iz identiteta CA. Iskljuci ako izdati
+# sertifikati treba da imaju samo CN.
+#
+role_root_ca_cert_subject_from_ca: true
+
+# Vlasnistvo i dozvole nad izdatim fajlovima.
+#
+# Privatni kljuc je 0640 sa grupom root — servis koji ga cita treba
+# dodati u odgovarajucu grupu preko polja group pojedinacnog unosa,
+# ne otvaranjem dozvola.
+#
+role_root_ca_cert_owner: root
+role_root_ca_cert_group: root
+role_root_ca_cert_key_mode: '0640'
+role_root_ca_cert_mode: '0644'
+
+# Obnova sertifikata koji istice u narednih N dana. Postavi 0 da bi
+# se obnova iskljucila.
+#
+# Obnova zadrzava postojeci privatni kljuc i menja samo sertifikat,
+# pa se ne mora nista ponovo distribuirati osim samog .crt fajla.
+#
+role_root_ca_renew_before_days: 30
+
+# Upis <ime>-fullchain.crt — izdati sertifikat i CA sertifikat u
+# jednom fajlu. Nginx ga trazi u tom obliku; Apache koristi odvojene
+# fajlove.
+#
+role_root_ca_fullchain: true
+
+
+# =====================================================================
+# POVERENJE NA SAMOM CA HOSTU
+# =====================================================================
+# Upisuje CA sertifikat u sistemski trust store ovog hosta i pokrece
+# update-ca-certificates.
+#
+# Odnosi se SAMO na host koji vodi CA. Ostali hostovi poverenje
+# dobijaju zasebno — kroz distribuciju ca.crt.
+#
+# NAPOMENA: sistemski trust store ne pokrivaju Java, NSS (Firefox,
+# Chrome), Python certifi ni Node. Svaki od njih ima sopstveni.
+#
+role_root_ca_trust_local: false
+role_root_ca_trust_filename: internal-root-ca
+
+
+# =====================================================================
+# PREUZIMANJE NA KONTROLNI CVOR
+# =====================================================================
+# Izdati sertifikati su na CA hostu, gde po pravilu ne trebaju nikome.
+# Ovom opcijom se preuzimaju u folder na kontrolnom cvoru, odakle se
+# dalje distribuiraju.
+#
+# PAZNJA: preuzimaju se i privatni kljucevi izdatih sertifikata.
+# Ciljni folder mora biti izvan git repozitorijuma i sa dozvolama
+# 0700. Kljuc samog CA se NE preuzima nikada.
+#
+role_root_ca_fetch_enabled: false
+role_root_ca_fetch_dir: /opt/ansible/production/files/pki
+
+
+# =====================================================================
+# ZAVISNOSTI
+# =====================================================================
+# Moduli iz community.crypto traze Python biblioteku cryptography na
+# ciljnom hostu.
+#
+role_root_ca_install_dependencies: true
+role_root_ca_dependency_packages:
+  - python3-cryptography
+
+
+# =====================================================================
+# ZASTITA OD VISESTRUKOG CA
+# =====================================================================
+# Rola prekida rad ako grupa sadrzi vise od jednog hosta. Svaki host
+# bi napravio sopstveni, nezavisan CA — sto je gotovo uvek greska u
+# inventory-ju, a otkriva se tek kada poverenje ne proradi.
+#
+# Ukljuci samo ako svesno vodis vise odvojenih CA.
+#
+role_root_ca_allow_multiple_hosts: false
+role_root_ca_group_name: deploy_root_ca
