@@ -1,0 +1,13 @@
+{% set _sudo_cmds = role_users_sudo_commands if item.sudo is boolean else item.sudo %}
+{% set _sudo_nopasswd = item.sudo_nopasswd | default(role_users_sudo_nopasswd) %}
+{{ '#' }} {{ _users_sudoers_dir }}/{{ role_users_sudo_file_prefix }}{{ item.name | regex_replace('[^A-Za-z0-9_-]', '_') }}
+{{ '#' }}
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: users
+{{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+{{ '#' }}
+{{ '#' }} Nalog : {{ item.name }}
+{{ '#' }} Izvor : role_users_list, polje sudo
+{{ '#' }}
+{{ '#' }} Sadrzaj je pre upisa proveren komandom visudo -cf.
+
+{{ item.name }} ALL=(ALL) {{ 'NOPASSWD:' if _sudo_nopasswd | bool else '' }}{{ _sudo_cmds }}
