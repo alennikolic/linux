@@ -89,11 +89,23 @@
     # 3. Konfiguracija
     # -----------------------------------------------------------------
     # Zaseban fajl, ne glavna konfiguracija — nadogradnja paketa je
-    # tako ne prepisuje. Prefiks 99- osigurava da se ucita poslednja.
+    # tako ne prepisuje.
+    #
+    # Ime fajla pocinje sa zz- da bi se ucitao POSLEDNJI. Vidi
+    # obrazlozenje u vars/main.yml.
+
+    # Ranije verzije role upisivale su 99-zabbix.cnf, koji se ucitavao
+    # PRE mysqld.cnf i time bio bez efekta. Brise se da dva fajla ne bi
+    # definisala iste opcije.
+    - name: "Uklanjanje konfiguracije iz ranijih verzija role"
+      ansible.builtin.file:
+        path: "{{ _zabbix_db_legacy_config_file }}"
+        state: absent
+      notify: "Restartuj bazu"
 
     - name: "Upis konfiguracije performansi"
       ansible.builtin.template:
-        src: 99-zabbix.cnf.j2
+        src: zz-zabbix.cnf.j2
         dest: "{{ _zabbix_db_config_file }}"
         owner: root
         group: root
