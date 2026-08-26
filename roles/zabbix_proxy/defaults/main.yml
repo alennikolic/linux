@@ -1,0 +1,208 @@
+---
+# roles/zabbix_proxy/defaults/main.yml
+#
+# Rola "zabbix_proxy" instalira i konfigurise Zabbix proxy.
+#
+# Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_proxy],
+# koja kroz group_vars/deploy_zabbix_proxy.yml postavlja
+# role_zabbix_proxy_enabled.
+#
+# PREDUSLOV: Zabbix repozitorijum — rola "repos", grupa [apply_repos].
+#
+# RAZLIKA U ODNOSU NA zabbix_server:
+# Proxy podrazumevano koristi SQLite, lokalnu bazu koju sam kreira
+# pri prvom pokretanju. Nije potrebna rola zabbix_db niti uvoz seme.
+# MySQL backend je opcija za proxy koji opsluzuje mnogo hostova.
+#
+# VAZNO: proxy se mora RUCNO dodati u Zabbix serveru
+# (Administration → Proxies) sa ISTIM imenom kao role_zabbix_proxy_hostname.
+# Bez toga server odbija podatke od proxy-ja.
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+
+role_zabbix_proxy_enabled: false
+
+
+# =====================================================================
+# BACKEND BAZE
+# =====================================================================
+# sqlite3 — lokalna baza, kreira se sama (podrazumevano)
+# mysql   — MySQL/MariaDB, zahteva pripremljenu bazu
+# pgsql   — PostgreSQL
+#
+# SQLite je dovoljan za proxy do nekoliko stotina hostova. Iznad toga
+# upis u SQLite postaje usko grlo — tada predji na MySQL.
+#
+role_zabbix_proxy_db_backend: sqlite3
+
+role_zabbix_proxy_version: ""
+
+
+# =====================================================================
+# IME PROXY-JA
+# =====================================================================
+# OBAVEZNO se mora poklapati sa imenom proxy-ja upisanim u Zabbix
+# serveru. Ako se razlikuje, server odbija podatke i u logu proxy-ja
+# se pojavljuje poruka o nepoznatom proxy-ju.
+#
+role_zabbix_proxy_hostname: "{{ inventory_hostname }}"
+
+
+# =====================================================================
+# VEZA SA SERVEROM
+# =====================================================================
+# OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
+#
+# Adresa Zabbix servera kojem proxy pripada. Kod aktivnog rezima
+# proxy sam otvara vezu ka ovoj adresi.
+#
+role_zabbix_proxy_server: ""
+
+
+# =====================================================================
+# REZIM RADA
+# =====================================================================
+# 0 = aktivan  — proxy sam zove server (podrazumevano)
+# 1 = pasivan  — server zove proxy
+#
+# Aktivan rezim je uobicajen: proxy je cesto iza NAT-a ili zastitnog
+# zida, pa je lakse da on otvara vezu. Pasivan koristi kada server
+# mora da kontrolise trenutak komunikacije.
+#
+# PAZNJA: rezim se mora poklapati sa podesavanjem u Zabbix serveru.
+# Neuskladjen rezim znaci da komunikacije nema, bez jasne greske.
+#
+role_zabbix_proxy_mode: 0
+
+
+# =====================================================================
+# MREZA
+# =====================================================================
+# Port na kojem proxy slusa. Koristi se u PASIVNOM rezimu; u aktivnom
+# proxy ne prima dolazne veze od servera.
+#
+role_zabbix_proxy_listen_port: 10051
+role_zabbix_proxy_listen_ip: ""
+
+# Adrese sa kojih se dozvoljava preuzimanje internih statistika.
+role_zabbix_proxy_stats_allowed_ip: "127.0.0.1"
+
+
+# =====================================================================
+# BAZA
+# =====================================================================
+# Za SQLite je DBName puna putanja do fajla. Folder mora postojati i
+# pripadati zabbix korisniku — rola to resava.
+#
+role_zabbix_proxy_db_name: /var/lib/zabbix/zabbix_proxy.sqlite3
+
+# Vazi samo za mysql i pgsql backend.
+role_zabbix_proxy_db_host: localhost
+role_zabbix_proxy_db_port: 3306
+role_zabbix_proxy_db_user: zabbix
+role_zabbix_proxy_db_password: ""
+
+
+# =====================================================================
+# CUVANJE PODATAKA
+# =====================================================================
+# Koliko dugo proxy cuva podatke koje jos nije poslao serveru, u
+# satima. Podrazumevano je 1 sat.
+#
+# Povecaj ako veza ka serveru ume da bude prekinuta duze — proxy ce
+# sacuvati podatke i poslati ih kada se veza vrati. Cena je prostor
+# na disku i vece opterecenje baze.
+#
+role_zabbix_proxy_offline_buffer: 1
+
+# Lokalni bafer. Podrazumevano 0 — podaci se brisu cim ih server
+# potvrdi. Vece vrednosti cuvaju podatke i posle slanja.
+role_zabbix_proxy_local_buffer: 0
+
+# Koliko cesto proxy salje podatke serveru, u sekundama.
+role_zabbix_proxy_data_sender_frequency: 1
+
+# Koliko cesto proxy preuzima konfiguraciju sa servera, u sekundama.
+# Manje vrednosti znace brze primenjene izmene, ali vise opterecuju
+# server.
+role_zabbix_proxy_config_frequency: 10
+
+
+# =====================================================================
+# LOGOVANJE
+# =====================================================================
+
+role_zabbix_proxy_logfile: /var/log/zabbix/zabbix_proxy.log
+role_zabbix_proxy_logfile_size: 10
+role_zabbix_proxy_debug_level: 3
+
+
+# =====================================================================
+# PROCESI
+# =====================================================================
+# Podrazumevane vrednosti odgovaraju malom proxy-ju (do ~100 hostova).
+
+role_zabbix_proxy_start_pollers: 5
+role_zabbix_proxy_start_pollers_unreachable: 1
+role_zabbix_proxy_start_trappers: 5
+role_zabbix_proxy_start_pingers: 1
+role_zabbix_proxy_start_discoverers: 1
+role_zabbix_proxy_start_http_pollers: 1
+role_zabbix_proxy_start_preprocessors: 3
+
+
+# =====================================================================
+# KESEVI
+# =====================================================================
+
+role_zabbix_proxy_cache_size: 32M
+role_zabbix_proxy_history_cache_size: 16M
+role_zabbix_proxy_history_index_cache_size: 4M
+
+
+# =====================================================================
+# PUTANJE
+# =====================================================================
+
+role_zabbix_proxy_external_scripts: /usr/lib/zabbix/externalscripts
+role_zabbix_proxy_fping_location: /usr/bin/fping
+role_zabbix_proxy_timeout: 4
+
+
+# =====================================================================
+# TLS
+# =====================================================================
+# Podrazumevano iskljuceno.
+#
+# Vrednosti: unencrypted (podrazumevano), psk, cert
+#
+# Isti identitet i kljuc moraju biti upisani i u Zabbix serveru, u
+# podesavanjima proxy-ja.
+#
+role_zabbix_proxy_tls_connect: unencrypted
+role_zabbix_proxy_tls_accept: unencrypted
+
+role_zabbix_proxy_tls_psk_identity: ""
+role_zabbix_proxy_tls_psk: ""
+role_zabbix_proxy_tls_psk_file: /etc/zabbix/zabbix_proxy.psk
+
+
+# =====================================================================
+# DODATNA KONFIGURACIJA
+# =====================================================================
+#   role_zabbix_proxy_extra_config: |
+#     StartSNMPTrapper=1
+#     SNMPTrapperFile=/var/log/snmptrap/snmptrap.log
+#
+role_zabbix_proxy_extra_config: ""
+
+
+# =====================================================================
+# SERVIS
+# =====================================================================
+
+role_zabbix_proxy_service_enabled: true
+role_zabbix_proxy_service_state: started
