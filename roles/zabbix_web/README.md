@@ -15,7 +15,11 @@ Apache više nije podržan.
 | Zabbix repozitorijum | rola `repos`, grupa `[apply_repos]` |
 | Baza sa uvezenom šemom | rola `zabbix_db`, grupa `[deploy_zabbix_db]` |
 | Port otvoren | rola `firewall`, grupa `[apply_firewall]` |
-| Sertifikat i ključ (uz HTTPS) | rola `root_ca`, ili ručno |
+| Kolekcija `community.crypto` | samo uz automatski self-signed sertifikat |
+
+```bash
+ansible-galaxy collection install community.crypto
+```
 
 **Frontend čita bazu direktno**, ne kroz Zabbix server. Mora imati mrežni pristup do baze, a ne samo do servera. Serveru se javlja samo za pojedine radnje — izvršavanje skripti i proveru dostupnosti.
 
@@ -43,41 +47,32 @@ role_zabbix_web_db_user: "zabbix_web"
 role_zabbix_web_db_password: "druga-lozinka"
 ```
 
-```yaml
-# host_vars/srv-mon-01.yml — deljen nalog sa serverom
-role_zabbix_web_db_user: "zabbix"
-role_zabbix_web_db_password: "prva-lozinka"
-```
-
 ---
 
 ## HTTPS
 
-Uključuje se jednom varijablom, ali traži sertifikat i privatni ključ na hostu.
+Uključuje se jednom varijablom:
 
 ```yaml
-# host_vars/srv-web-01.yml
 role_zabbix_web_https_enabled: true
 role_zabbix_web_https_port: 443
+role_zabbix_web_listen_port: 80
 role_zabbix_web_hostname: "zabbix.example.com"
-
-role_zabbix_web_tls_cert: /etc/ssl/certs/zabbix-frontend-fullchain.pem
-role_zabbix_web_tls_key: /etc/ssl/private/zabbix-frontend.key
 ```
 
-Fajlovi mogu doći na dva načina.
+Sertifikat i ključ rola traži na `role_zabbix_web_tls_cert` i `role_zabbix_web_tls_key`. Materijal može doći na tri načina, kojima rola pristupa tim redom.
 
-**Već postoje na hostu** — postavila ih je rola `root_ca` ili si ih doneo ručno. Rola ih tada samo koristi i proverava da postoje.
+### 1. Sadržaj zadat u varijablama
 
-**Sadržaj se zada kroz varijable** — rola ih upisuje na zadate putanje:
+Ima prednost nad svime i prepisuje postojeće fajlove pri svakom pokretanju.
 
 ```yaml
 role_zabbix_web_tls_cert_content: |
   -----BEGIN CERTIFICATE-----
-  ...
+  ...sertifikat hosta...
   -----END CERTIFICATE-----
   -----BEGIN CERTIFICATE-----
-  ...
+  ...sertifikat CA...
   -----END CERTIFICATE-----
 
 role_zabbix_web_tls_key_content: |
@@ -86,19 +81,44 @@ role_zabbix_web_tls_key_content: |
   -----END PRIVATE KEY-----
 ```
 
-> Sertifikat mora biti **pun lanac**: prvo sertifikat hosta, pa sertifikat izdavaoca. Sa samo listom sertifikatom pretraživač prijavljuje nepoznatog izdavaoca, iako je CA u sistemskom skladištu poverenja.
+### 2. Fajlovi već postoje na hostu
 
-> `role_zabbix_web_hostname` mora odgovarati imenu iz sertifikata. Sa podrazumevanim `_` pretraživač uvek prijavljuje neslaganje.
-
-Pravila zaštitnog zida:
+Postavila ih je rola `root_ca`, doneti su ručno, ili ih je ova rola napravila ranije. Rola ih tada **samo koristi i ne dira**.
 
 ```yaml
-role_firewall_rules:
-  - { rule: allow, port: 443, proto: tcp, from: "10.0.0.0/8", comment: "Zabbix frontend HTTPS" }
-  - { rule: allow, port: 8080, proto: tcp, from: "10.0.0.0/8", comment: "Zabbix frontend, preusmeravanje" }
+role_zabbix_web_tls_cert: /root/ca/certs/zabbix-frontend-fullchain.crt
+role_zabbix_web_tls_key: /root/ca/private/zabbix-frontend.key
 ```
 
-Drugo pravilo je potrebno samo dok je `role_zabbix_web_http_redirect: true`.
+### 3. Automatski self-signed
+
+Kada **nijedan** od dva fajla ne postoji, rola pravi privremeni self-signed sertifikat, tako da frontend odmah radi preko HTTPS-a. Podrazumevano uključeno.
+
+```yaml
+role_zabbix_web_tls_selfsigned: true
+role_zabbix_web_tls_selfsigned_cn: "zabbix.example.com"
+role_zabbix_web_tls_selfsigned_sans:
+  - "IP:10.0.0.60"
+  - "DNS:srv-web-01"
+role_zabbix_web_tls_selfsigned_days: 397
+```
+
+CN podrazumevano prati `role_zabbix_web_hostname`, a kada je on `_` pada na ime hosta iz inventory-ja. SAN unos za sam CN rola dodaje sama — kao `IP:` ako je CN IPv4 adresa, inače kao `DNS:`. U `role_zabbix_web_tls_selfsigned_sans` ide samo ono dodatno.
+
+> Pretraživač će prijavljivati grešku koju korisnik mora ručno preskočiti. Ovo je polazna tačka, ne rešenje.
+
+**Prelazak na pravi sertifikat** ne traži nikakvu izmenu konfiguracije. Prekopiraj fajlove preko postojećih i restartuj Nginx:
+
+```bash
+sudo cp fullchain.pem /etc/ssl/certs/zabbix-frontend-fullchain.pem
+sudo cp privkey.pem /etc/ssl/private/zabbix-frontend.key
+sudo chmod 0600 /etc/ssl/private/zabbix-frontend.key
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Rola ih neće prepisati, jer nove pravi isključivo kada **oba** fajla nedostaju.
+
+Alternativa: obriši oba fajla i zadaj sadržaj kroz `_cert_content` / `_key_content`, pa pusti rolu.
 
 ---
 
@@ -147,13 +167,25 @@ Drugo pravilo je potrebno samo dok je `role_zabbix_web_http_redirect: true`.
 | `role_zabbix_web_http_redirect` | `true` | Preusmerava HTTP na HTTPS. |
 | `role_zabbix_web_tls_cert` | `/etc/ssl/certs/zabbix-frontend-fullchain.pem` | Putanja do punog lanca. |
 | `role_zabbix_web_tls_key` | `/etc/ssl/private/zabbix-frontend.key` | Putanja do privatnog ključa. |
-| `role_zabbix_web_tls_cert_content` | `""` | PEM sadržaj. Prazno = fajl već postoji. |
+| `role_zabbix_web_tls_cert_content` | `""` | PEM sadržaj. Prepisuje fajl. |
 | `role_zabbix_web_tls_key_content` | `""` | PEM sadržaj. **Tajna.** |
 | `role_zabbix_web_tls_protocols` | `TLSv1.2 TLSv1.3` | Dozvoljene verzije. |
 | `role_zabbix_web_tls_ciphers` | Mozilla intermediate | Spisak šifri. |
 | `role_zabbix_web_http2` | `true` | HTTP/2. Sintaksa se bira prema verziji Nginx-a. |
-| `role_zabbix_web_hsts_enabled` | `false` | HSTS zaglavlje. Pažljivo — vidi napomene. |
+| `role_zabbix_web_hsts_enabled` | `false` | HSTS zaglavlje. Vidi napomene. |
 | `role_zabbix_web_hsts_max_age` | `31536000` | Sekunde. Godina dana. |
+
+### Automatski self-signed
+
+| Varijabla | Podrazumevano | Opis |
+|---|---|---|
+| `role_zabbix_web_tls_selfsigned` | `true` | Pravi sertifikat kada oba fajla nedostaju. |
+| `role_zabbix_web_tls_selfsigned_cn` | prati `hostname` | Common Name. |
+| `role_zabbix_web_tls_selfsigned_sans` | `[]` | **Dodatni** SAN unosi. Za CN se dodaje sam. |
+| `role_zabbix_web_tls_selfsigned_org` | `""` | Organizacija. Prazno = ne upisuj. |
+| `role_zabbix_web_tls_selfsigned_days` | `397` | Važenje. |
+| `role_zabbix_web_tls_selfsigned_key_size` | `2048` | Dužina RSA ključa. |
+| `role_zabbix_web_tls_dependency_packages` | `[python3-cryptography]` | Zavisnosti za rad sa sertifikatima. |
 
 ### PHP
 
@@ -179,27 +211,11 @@ Drugo pravilo je potrebno samo dok je `role_zabbix_web_http_redirect: true`.
 
 ## Primeri
 
-### Sve na jednom hostu, HTTP
-
-```yaml
-# host_vars/srv-mon-01.yml
-role_zabbix_web_db_password: "prva-lozinka"
-role_zabbix_web_server_name: "Monitoring — Produkcija"
-
-role_firewall_rules:
-  - { rule: allow, port: 8080, proto: tcp, from: "10.0.0.0/8", comment: "Zabbix frontend" }
-```
-
-Frontend je na `http://srv-mon-01:8080`.
-
-### Frontend na zasebnom hostu, HTTPS na 443
+### Najbrži put do HTTPS-a
 
 ```yaml
 # host_vars/srv-web-01.yml
-role_zabbix_web_db_host: "10.0.0.21"
-role_zabbix_web_db_user: "zabbix_web"
 role_zabbix_web_db_password: "druga-lozinka"
-role_zabbix_web_server_host: "10.0.0.50"
 
 role_zabbix_web_hostname: "zabbix.example.com"
 role_zabbix_web_https_enabled: true
@@ -207,28 +223,45 @@ role_zabbix_web_https_port: 443
 role_zabbix_web_listen_port: 80
 
 role_firewall_rules:
-  - { rule: allow, port: 443, proto: tcp, from: "10.0.0.0/8", comment: "Zabbix frontend HTTPS" }
-  - { rule: allow, port: 80, proto: tcp, from: "10.0.0.0/8", comment: "Preusmeravanje na HTTPS" }
+  - { rule: allow, port: 443, proto: tcp, comment: "Zabbix frontend HTTPS" }
+  - { rule: allow, port: 80, proto: tcp, comment: "Preusmeravanje na HTTPS" }
 ```
 
-Na hostu baze mora postojati dozvola i za ovaj host:
+Ništa oko sertifikata — rola pravi self-signed za `zabbix.example.com`.
+
+### Sertifikat iz role `root_ca` na istom hostu
 
 ```yaml
-# host_vars/srv-db-01.yml
-role_zabbix_db_frontend_enabled: true
-role_zabbix_db_frontend_password: "druga-lozinka"
-role_zabbix_db_frontend_hosts:
-  - "10.0.0.60"
-```
+role_root_ca_issued_certs:
+  - cn: "zabbix.example.com"
+    filename: zabbix-frontend
 
-### Samo HTTPS, bez preusmeravanja
-
-```yaml
 role_zabbix_web_https_enabled: true
-role_zabbix_web_http_redirect: false
+role_zabbix_web_hostname: "zabbix.example.com"
+role_zabbix_web_tls_cert: /root/ca/certs/zabbix-frontend-fullchain.crt
+role_zabbix_web_tls_key: /root/ca/private/zabbix-frontend.key
 ```
 
-Na HTTP portu tada nema ničega.
+U `playbook.yml` `deploy_root_ca` mora ići pre `deploy_zabbix_web`.
+
+### Frontend na IP adresi
+
+```yaml
+role_zabbix_web_hostname: "10.0.0.60"
+role_zabbix_web_https_enabled: true
+role_zabbix_web_tls_selfsigned_sans:
+  - "DNS:srv-web-01"
+```
+
+CN je IP adresa, pa rola sama upisuje `IP:10.0.0.60` u SAN.
+
+### Rola ne sme improvizovati
+
+```yaml
+role_zabbix_web_tls_selfsigned: false
+```
+
+Kada fajlova nema, rola prekida rad umesto da napravi privremeni sertifikat.
 
 ### Ograničavanje pristupa po mreži
 
@@ -238,33 +271,29 @@ role_zabbix_web_nginx_extra_config: |
   deny all;
 ```
 
-### Stariji klijenti bez TLSv1.3
-
-```yaml
-role_zabbix_web_tls_protocols: "TLSv1.2"
-```
-
 ---
 
 ## Napomene
 
 **Čarobnjak se preskače.** Kada `zabbix.conf.php` postoji i sadrži ispravne podatke, frontend odmah prikazuje ekran za prijavu. Podrazumevani nalog je `Admin` sa lozinkom `zabbix` — **promeni je odmah po prvoj prijavi.**
 
-**Verzija PHP-a se otkriva iz sistema.** Ubuntu 22.04 isporučuje PHP 8.1, 24.04 isporučuje 8.3. Rola pokreće `php -r` umesto da verziju zakuje, pa putanja do `conf.d` foldera uvek odgovara.
+**Self-signed se pravi samo kada oba fajla nedostaju.** Čim jedan postoji, rola ne pravi ništa — inače bi ručno donet sertifikat bio prepisan pri sledećem pokretanju. Ako postoji tačno jedan fajl, rola prekida rad, jer je to gotovo uvek trag prekinutog ranijeg pokušaja.
 
-**Sintaksa za HTTP/2 se menjala.** Do Nginx 1.25.0 ide kao parametar direktive `listen`, od 1.25.1 kao zasebna direktiva `http2 on`. Stara sintaksa na novom Nginx-u ispisuje upozorenje, nova na starom prekida rad. Rola otkriva verziju i bira ispravnu — Ubuntu 24.04 isporučuje 1.24.0, dakle staru.
+**SAN je obavezan, CN se ne gleda.** Od Chrome 58 i ekvivalentnih verzija ostalih klijenata validacija ide isključivo preko SAN-a. Rola zato unos za sam CN dodaje sama.
 
-**HSTS se ne može povući.** Pretraživač pamti zaglavlje `max_age` sekundi bez obzira na to što si opciju u međuvremenu ugasio. Ako sertifikat istekne ili sajt posluži preko HTTP-a, klijenti dobijaju grešku koju ne mogu preskočiti. Uključi tek kada je HTTPS stabilan i sertifikat se pouzdano obnavlja.
+**HSTS i self-signed se ne trpe.** Greška sertifikata uz aktivan HSTS se u većini pretraživača **ne može preskočiti**. Ostavi HSTS isključen dok ne dobiješ sertifikat kojem klijenti veruju.
+
+**Verzija PHP-a se otkriva iz sistema.** Ubuntu 22.04 isporučuje PHP 8.1, 24.04 isporučuje 8.3. Rola pokreće `php -r` umesto da verziju zakuje.
+
+**Sintaksa za HTTP/2 se menjala.** Do Nginx 1.25.0 ide kao parametar direktive `listen`, od 1.25.1 kao zasebna direktiva `http2 on`. Rola otkriva verziju i bira ispravnu — Ubuntu 24.04 isporučuje 1.24.0, dakle staru.
 
 **`fastcgi_param HTTPS on`** se dodaje samo uz TLS. Bez toga PHP ne zna da je veza šifrovana, pa Zabbix ne postavlja `secure` zastavicu na kolačić sesije.
 
-**Konfiguracija se proverava pre restarta.** Rola pokreće `nginx -t` posle upisa vhost-a. Greška u konfiguraciji prekida rolu pre nego što obori web server koji do tada radi.
+**Konfiguracija se proverava pre restarta.** Rola pokreće `nginx -t` posle upisa vhost-a. Greška prekida rolu pre nego što obori web server koji do tada radi.
 
-**Privatni ključ ima dozvole `0600` i vlasnika `root`.** Nginx master proces radi kao root i čita ga pre nego što spusti privilegije radnih procesa. Task ima `no_log: true`, pa se ključ ne pojavljuje u ispisu.
+**Privatni ključ ima dozvole `0600` i vlasnika `root`.** Nginx master proces radi kao root i čita ga pre nego što spusti privilegije radnih procesa. Taskovi koji ga dodiruju imaju `no_log: true`.
 
-**`zabbix.conf.php` sadrži lozinku**, pa ima dozvole `0640` i grupu `www-data`. Task ima `no_log: true`, što znači da `--diff` neće prikazati razliku u tom fajlu.
-
-**Idempotentnost.** Rola je idempotentna. Ponovljeno pokretanje prijavljuje `ok` i ne restartuje servise, osim kada se paket ili konfiguracija zaista promene.
+**Idempotentnost.** Rola je idempotentna. Ponovljeno pokretanje prijavljuje `ok` i ne restartuje servise. Self-signed sertifikat se ne pravi ponovo — ni pri isteku. Obnova je ručna: obriši oba fajla i pusti rolu.
 
 ---
 
@@ -294,42 +323,63 @@ roles/zabbix_web/
 ansible srv-web-01 -m command -a "systemctl status nginx"
 ansible srv-web-01 -m shell -a "systemctl status php*-fpm"
 
-# Šta Nginx sluša
-ansible srv-web-01 -m command -a "ss -lntp sport = :443"
-
 # Da li konfiguracija prolazi
 ansible srv-web-01 -m command -a "nginx -t" --become
+
+# Šta Nginx sluša
+ansible srv-web-01 -m command -a "ss -lntp sport = :443"
 ```
 
-Provera TLS-a sa kontrolnog čvora:
+Sertifikat na hostu:
 
 ```bash
-# Lanac, ime i rok važenja
+# Ko ga je izdao, kome glasi, dokle važi
+sudo openssl x509 -in /etc/ssl/certs/zabbix-frontend-fullchain.pem \
+  -noout -subject -issuer -dates
+
+# SAN
+sudo openssl x509 -in /etc/ssl/certs/zabbix-frontend-fullchain.pem \
+  -noout -text | grep -A1 "Subject Alternative Name"
+```
+
+Ako su `subject` i `issuer` isti, sertifikat je self-signed.
+
+Sa kontrolnog čvora:
+
+```bash
 openssl s_client -connect zabbix.example.com:443 -servername zabbix.example.com </dev/null 2>/dev/null \
   | openssl x509 -noout -subject -issuer -dates
 
-# Da li preusmeravanje radi
 curl -sI http://zabbix.example.com/ | head -3
-
-# Da li frontend odgovara
-curl -sI https://zabbix.example.com/ | head -3
+curl -kIs https://zabbix.example.com/ | head -3
 ```
-
-Iz pretraživača otvori `https://zabbix.example.com`. Očekuje se ekran za prijavu, ne čarobnjak.
 
 ---
 
 ## Rešavanje problema
 
-### `nginx -t` prijavljuje `cannot load certificate`
+### `Postoji samo jedan od dva TLS fajla`
 
-Putanja je pogrešna ili fajl ne postoji:
+Prethodni pokušaj je prekinut na pola, ili je neko doneo samo sertifikat. Donesi i drugi fajl, ili obriši preostali:
 
 ```bash
-ls -l /etc/ssl/certs/zabbix-frontend-fullchain.pem /etc/ssl/private/zabbix-frontend.key
+sudo rm -f /etc/ssl/private/zabbix-frontend.key
 ```
 
-Ako je poruka `PEM_read_bio_X509_AUX`, fajl nije u PEM formatu — verovatno je DER ili PKCS#12. Konverzija:
+pa pusti rolu ponovo — napraviće nov par.
+
+### Self-signed sertifikat je istekao
+
+Rola ga ne obnavlja sama. Obriši oba fajla i pusti rolu:
+
+```bash
+sudo rm -f /etc/ssl/certs/zabbix-frontend-fullchain.pem \
+           /etc/ssl/private/zabbix-frontend.key
+```
+
+### `nginx -t` prijavljuje `cannot load certificate`
+
+Ako je poruka `PEM_read_bio_X509_AUX`, fajl nije u PEM formatu — verovatno je DER ili PKCS#12:
 
 ```bash
 openssl x509 -inform DER -in cert.der -out cert.pem
@@ -338,13 +388,13 @@ openssl pkcs12 -in cert.pfx -nocerts -nodes -out key.pem
 
 ### Pretraživač prijavljuje nepoznatog izdavaoca
 
-Sertifikat nije pun lanac. Proveri koliko blokova ima:
+Očekivano uz self-signed. Uz sertifikat iz sopstvenog CA znači da lanac nije pun:
 
 ```bash
 grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/zabbix-frontend-fullchain.pem
 ```
 
-Uz sopstveni CA očekuje se najmanje 2. Spoj ih:
+Očekuje se najmanje 2. Spoj ih:
 
 ```bash
 cat host.crt ca.crt > fullchain.pem
@@ -352,15 +402,11 @@ cat host.crt ca.crt > fullchain.pem
 
 ### Pretraživač prijavljuje neslaganje imena
 
-`role_zabbix_web_hostname` se razlikuje od CN/SAN vrednosti u sertifikatu:
-
-```bash
-openssl x509 -in /etc/ssl/certs/zabbix-frontend-fullchain.pem -noout -text | grep -A1 "Subject Alternative Name"
-```
+`role_zabbix_web_hostname` se razlikuje od SAN vrednosti u sertifikatu. Uz automatski self-signed to znači da je `hostname` promenjen posle pravljenja sertifikata — obriši oba fajla i pusti rolu ponovo.
 
 ### Beskonačno preusmeravanje
 
-Reverse proxy ispred već završava TLS i prosleđuje HTTP, a ovaj vhost opet preusmerava. Isključi preusmeravanje:
+Reverse proxy ispred već završava TLS i prosleđuje HTTP, a ovaj vhost opet preusmerava:
 
 ```yaml
 role_zabbix_web_http_redirect: false
@@ -369,21 +415,15 @@ role_zabbix_web_https_enabled: false
 
 ### Pojavljuje se čarobnjak umesto ekrana za prijavu
 
-`zabbix.conf.php` ne postoji ili PHP ne može da ga pročita:
-
-```bash
-ansible srv-web-01 -m command -a "ls -l /etc/zabbix/web/zabbix.conf.php"
-```
-
-Očekuje se `root:www-data` sa `0640`.
+`zabbix.conf.php` ne postoji ili PHP ne može da ga pročita. Očekuje se `root:www-data` sa `0640`.
 
 ### `Database error: Connection to database failed`
 
-Frontend ne može do baze. Proveri da lozinka i ime naloga odgovaraju roli `zabbix_db`, i da `role_zabbix_db_frontend_hosts` pokriva IP ovog hosta.
+Proveri da lozinka i ime naloga odgovaraju roli `zabbix_db`, i da `role_zabbix_db_frontend_hosts` pokriva IP ovog hosta.
 
 ### `Zabbix server is not running`
 
-Frontend radi, ali ne može do servera na portu 10051. Proveri `role_zabbix_web_server_host` i pravilo zaštitnog zida. Ovo ne sprečava pregled podataka — samo radnje koje traže server.
+Frontend radi, ali ne može do servera na portu 10051. Proveri `role_zabbix_web_server_host` i pravilo zaštitnog zida. Ne sprečava pregled podataka — samo radnje koje traže server.
 
 ### `502 Bad Gateway`
 
@@ -395,4 +435,4 @@ ansible srv-web-01 -m command -a "ls -l /run/php/zabbix.sock"
 
 ### Odjavljuje me pri svakom osvežavanju stranice
 
-Uz HTTPS iza reverse proxy-ja koji ne prosleđuje `X-Forwarded-Proto`, Zabbix postavi `secure` kolačić koji pretraživač ne vraća preko HTTP-a. Reši se time što proxy prosleđuje zaglavlje, ili se TLS završava na ovom hostu.
+Uz HTTPS iza reverse proxy-ja koji ne prosleđuje `X-Forwarded-Proto`, Zabbix postavi `secure` kolačić koji pretraživač ne vraća preko HTTP-a.
