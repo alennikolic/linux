@@ -3,9 +3,12 @@
 #
 #   1. Provere
 #   2. Instalacija paketa
-#   3. Uvoz seme (jednokratno)
-#   4. Konfiguracioni fajl
-#   5. Servis
+#   3. Konfiguracioni fajl
+#   4. Servis
+#
+# Rola bazu NE dira. Ne kreira je, ne uvozi semu, ne menja
+# privilegije — samo upisuje podatke o vezi u konfiguraciju. Ceo
+# posao nad bazom radi rola "zabbix_db", na hostu baze.
 
 - name: "Instalacija i konfiguracija Zabbix servera"
   block:
@@ -39,132 +42,71 @@
           - role_zabbix_server_db_password is defined
           - role_zabbix_server_db_password | length > 0
         fail_msg: >-
-          role_zabbix_server_db_password nije popunjen. Sifruj lozinku
-          sa: ansible-vault encrypt_string 'lozinka'
-          --name 'role_zabbix_server_db_password'
-          pa je upisi u group_vars ili host_vars.
+          role_zabbix_server_db_password nije popunjen. Upisi ga u
+          host_vars/<host>.yml na kontrolnom cvoru. Mora biti ISTA
+          vrednost kao role_zabbix_db_password na hostu baze.
         success_msg: "Lozinka baze je zadata."
+
+    # Ime hosta "localhost" MySQL klijent tumaci kao unix socket i
+    # ignorise DBPort. Za bazu na drugom hostu to znaci da se server
+    # tiho pokusava povezati lokalno i pada sa nejasnom greskom.
+    - name: "Provera da udaljena baza nije zadata kao localhost"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_server_db_socket | length == 0
+        fail_msg: >-
+          role_zabbix_server_db_host je "localhost", ali je zadat i
+          role_zabbix_server_db_socket. Za bazu na drugom hostu upisi
+          IP adresu u role_zabbix_server_db_host i ostavi socket
+          prazan.
+        success_msg: "Podesavanja veze sa bazom su konzistentna."
+      when: role_zabbix_server_db_host == 'localhost'
 
     # -----------------------------------------------------------------
     # 2. Instalacija
     # -----------------------------------------------------------------
+    # Paket zabbix-sql-scripts se ovde vise NE instalira — dolazi uz
+    # rolu "zabbix_db", na hostu baze, gde se sema i uvozi.
+    #
+    # Ako paket nije dostupan, gotovo uvek znaci da Zabbix
+    # repozitorijum nije dodat. Originalna apt greska ostaje u ispisu,
+    # a rescue grana ispod dodaje objasnjenje sta proveriti.
 
-    - name: "Instalacija Zabbix servera i SQL skripti"
-      ansible.builtin.apt:
-        name: >-
-          {{ [_zabbix_server_package, 'zabbix-sql-scripts']
-             | map('regex_replace', '$',
-                   '=' ~ role_zabbix_server_version
-                   if role_zabbix_server_version | length > 0 else '')
-             | list }}
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-      notify: "Restartuj Zabbix server"
+    - name: "Instalacija Zabbix servera"
+      block:
 
-    - name: "Instalacija klijenta baze"
-      ansible.builtin.apt:
-        name: "{{ _zabbix_server_db_client_package }}"
-        state: present
-      when: role_zabbix_server_db_import | bool
+        - name: "Instalacija paketa {{ _zabbix_server_package }}"
+          ansible.builtin.apt:
+            name: >-
+              {{ _zabbix_server_package }}{{
+                 '=' ~ role_zabbix_server_version
+                 if role_zabbix_server_version | length > 0 else '' }}
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+          notify: "Restartuj Zabbix server"
 
-    # -----------------------------------------------------------------
-    # 3. Uvoz seme
-    # -----------------------------------------------------------------
-    # Lozinka ide kroz promenljivu okruzenja, ne kroz argument
-    # komande — argumenti su vidljivi u izlazu "ps".
+      rescue:
 
-    - name: "Provera da li sema vec postoji"
-      ansible.builtin.shell:
-        cmd: >-
-          mysql -h {{ role_zabbix_server_db_host }}
-          -P {{ role_zabbix_server_db_port }}
-          -u {{ role_zabbix_server_db_user }}
-          {{ role_zabbix_server_db_name }}
-          -e "SELECT mandatory FROM dbversion LIMIT 1"
-      environment:
-        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
-      register: _schema_check
-      changed_when: false
-      failed_when: false
-      no_log: true
-      when:
-        - role_zabbix_server_db_import | bool
-        - role_zabbix_server_db_backend == 'mysql'
-
-    # MySQL 8.0 sa binarnim logom odbija CREATE FUNCTION bez ove
-    # opcije. Ukljucuje se samo za trajanje uvoza.
-    - name: "Privremeno ukljucivanje log_bin_trust_function_creators"
-      ansible.builtin.shell:
-        cmd: >-
-          mysql -h {{ role_zabbix_server_db_host }}
-          -P {{ role_zabbix_server_db_port }}
-          -u {{ role_zabbix_server_db_user }}
-          -e "SET GLOBAL log_bin_trust_function_creators = 1"
-      environment:
-        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
-      changed_when: true
-      failed_when: false
-      no_log: true
-      when:
-        - role_zabbix_server_db_import | bool
-        - role_zabbix_server_db_backend == 'mysql'
-        - role_zabbix_server_db_set_log_bin_trust | bool
-        - _schema_check.rc | default(1) != 0
-
-    - name: "Uvoz seme u bazu (jednokratno)"
-      ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail &&
-          zcat {{ _zabbix_server_schema_file }} |
-          mysql --default-character-set=utf8mb4
-          -h {{ role_zabbix_server_db_host }}
-          -P {{ role_zabbix_server_db_port }}
-          -u {{ role_zabbix_server_db_user }}
-          {{ role_zabbix_server_db_name }}
-        executable: /bin/bash
-      environment:
-        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
-      changed_when: true
-      no_log: true
-      when:
-        - role_zabbix_server_db_import | bool
-        - role_zabbix_server_db_backend == 'mysql'
-        - _schema_check.rc | default(1) != 0
-      notify: "Restartuj Zabbix server"
-
-    - name: "Vracanje log_bin_trust_function_creators na staru vrednost"
-      ansible.builtin.shell:
-        cmd: >-
-          mysql -h {{ role_zabbix_server_db_host }}
-          -P {{ role_zabbix_server_db_port }}
-          -u {{ role_zabbix_server_db_user }}
-          -e "SET GLOBAL log_bin_trust_function_creators = 0"
-      environment:
-        MYSQL_PWD: "{{ role_zabbix_server_db_password }}"
-      changed_when: true
-      failed_when: false
-      no_log: true
-      when:
-        - role_zabbix_server_db_import | bool
-        - role_zabbix_server_db_backend == 'mysql'
-        - role_zabbix_server_db_set_log_bin_trust | bool
-        - _schema_check.rc | default(1) != 0
-
-    - name: "Napomena za PostgreSQL"
-      ansible.builtin.debug:
-        msg: >-
-          Backend je pgsql. Uvoz seme za PostgreSQL rola trenutno ne
-          radi automatski. Uvezi je rucno:
-          zcat {{ _zabbix_server_schema_file }} |
-          sudo -u zabbix psql {{ role_zabbix_server_db_name }}
-      when:
-        - role_zabbix_server_db_import | bool
-        - role_zabbix_server_db_backend == 'pgsql'
+        - name: "Objasnjenje neuspele instalacije"
+          ansible.builtin.fail:
+            msg: >-
+              Instalacija paketa "{{ _zabbix_server_package }}" nije
+              uspela. Najcesci uzrok je da Zabbix repozitorijum nije
+              dodat — host mora biti i u grupi [apply_repos], a
+              apply_repos mora ici pre deploy_zabbix_server u
+              playbook.yml. Proveri sa:
+              apt-cache policy {{ _zabbix_server_package }}
+              Druga mogucnost je zakovana verzija koja u
+              repozitorijumu ne postoji; dostupne vidis sa:
+              apt-cache madison {{ _zabbix_server_package }}
 
     # -----------------------------------------------------------------
-    # 4. Konfiguracija
+    # 3. Konfiguracija
     # -----------------------------------------------------------------
+    # Fajl sadrzi lozinku baze, pa ima dozvole 0640 i grupu zabbix.
+    # no_log: true znaci da --diff nece prikazati razliku; to je cena
+    # zastite lozinke.
 
     - name: "Upis konfiguracionog fajla"
       ansible.builtin.template:
@@ -178,7 +120,7 @@
       notify: "Restartuj Zabbix server"
 
     # -----------------------------------------------------------------
-    # 5. Servis
+    # 4. Servis
     # -----------------------------------------------------------------
 
     - name: "Servis {{ _zabbix_server_service }}"
