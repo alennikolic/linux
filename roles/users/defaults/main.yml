@@ -1,0 +1,236 @@
+---
+# roles/users/defaults/main.yml
+#
+# Rola "users" upravlja korisnickim nalozima, grupama, SSH kljucevima
+# i sudo pravilima.
+#
+# Aktivacija ide preko clanstva hosta u grupi [apply_users], koja kroz
+# group_vars/apply_users.yml postavlja role_users_enabled. Vrednost
+# ispod je samo podrazumevana.
+#
+# Parametre menjaj u:
+#   group_vars/all.yml        — globalno
+#   host_vars/<host>.yml      — za pojedinacan host
+#
+# PAZNJA — NEPOVRATNE IZMENE:
+#
+#   Nalog sa state: absent se BRISE. Ako je pri tom ukljucen
+#   role_users_remove_home, brise se i kucni folder sa celim
+#   sadrzajem. To se ne moze vratiti.
+#
+#   Rola je inace aditivna: nalozi koji nisu navedeni u
+#   role_users_list se ne diraju ni na koji nacin.
+#
+# ZAVISNOST: SSH kljucevi se postavljaju modulom
+# ansible.posix.authorized_key.
+#
+#   ansible-galaxy collection install ansible.posix
+
+
+# =====================================================================
+# AKTIVACIJA
+# =====================================================================
+# Kada je false, rola ne dira nista.
+#
+role_users_enabled: false
+
+
+# =====================================================================
+# GRUPE
+# =====================================================================
+# Grupe se kreiraju PRE naloga. Ako nalog navodi grupu koja ne postoji
+# ni na sistemu ni u listi ispod, task za taj nalog pada.
+#
+# Sistemske grupe (sudo, adm, docker) vec postoje — njih ovde ne
+# navodi, samo ih koristi u polju groups pojedinacnog naloga.
+#
+#   role_users_groups:
+#     - name: operateri
+#     - name: aplikacija
+#       gid: 3000
+#     - name: interni-servis
+#       system: true
+#
+# Polja: name (obavezno), gid, system, state (present/absent)
+#
+role_users_groups: []
+
+
+# =====================================================================
+# NALOZI
+# =====================================================================
+# Lista naloga. Jedino obavezno polje je name.
+#
+#   role_users_list:
+#     - name: milan
+#       comment: "Milan Petrovic"
+#       groups: [sudo]
+#       ssh_keys:
+#         - "ssh-ed25519 AAAAC3Nz... milan@laptop"
+#       sudo: true
+#
+#     - name: deploy
+#       comment: "Nalog za isporuku aplikacije"
+#       shell: /bin/bash
+#       ssh_keys:
+#         - "ssh-ed25519 AAAAC3Nz... ci@runner"
+#       sudo: "/usr/bin/systemctl restart aplikacija"
+#
+#     - name: bivsi-kolega
+#       state: absent
+#
+# Podrzana polja po nalogu:
+#
+#   name          — ime naloga (obavezno)
+#   state         — present (podrazumevano) ili absent
+#   comment       — polje u /etc/passwd (ime i prezime, namena naloga)
+#   uid           — fiksan UID; korisno kada isti nalog mora imati isti
+#                   UID na vise masina zbog NFS-a
+#   groups        — lista dodatnih grupa
+#   append        — nadjacava role_users_append_groups za ovaj nalog
+#   shell         — nadjacava role_users_default_shell
+#   home          — kucni folder; prazno prepusta izbor sistemu
+#   create_home   — nadjacava role_users_create_home
+#   system        — sistemski nalog (UID ispod praga, bez kucnog foldera
+#                   po pravilu)
+#   password      — HES lozinke, nikada cist tekst (vidi ispod)
+#   password_lock — true zakljucava lozinku, prijava iskljucivo kljucem
+#   ssh_keys      — lista javnih kljuceva
+#   ssh_key_exclusive — nadjacava role_users_ssh_key_exclusive
+#   sudo          — true za pun pristup, ili string sa spiskom komandi
+#   sudo_nopasswd — nadjacava role_users_sudo_nopasswd
+#
+role_users_list: []
+
+
+# ---------------------------------------------------------------------
+# O polju password
+# ---------------------------------------------------------------------
+# Vrednost mora biti HES, ne cist tekst. Ako se upise cist tekst,
+# useradd ga doslovno stavlja u /etc/shadow i nalog postaje trajno
+# nedostupan — bez greske, bez upozorenja. Rola to hvata assert-om
+# koji trazi da vrednost pocinje znakom $.
+#
+# Hes se pravi na kontrolnom cvoru:
+#
+#   mkpasswd --method=yescrypt        # Ubuntu 24.04 podrazumevano
+#   openssl passwd -6                 # SHA-512, radi svuda
+#
+# Hes je osetljiv podatak i pripada vault-u:
+#
+#   ansible-vault encrypt_string --name 'lozinka_milan' '$y$j9T$...'
+#
+# Vecina naloga u ovom repozitorijumu ne treba lozinku uopste —
+# prijava ide kljucem, a povisenje privilegija kroz sudo NOPASSWD.
+
+
+# =====================================================================
+# PODRAZUMEVANE VREDNOSTI ZA NALOGE
+# =====================================================================
+# Vaze za svaki nalog koji ih sam ne nadjacava.
+
+role_users_default_shell: /bin/bash
+
+# Grupe koje dobija svaki nalog, pored sopstvenih.
+# Primer: role_users_default_groups: [users]
+#
+role_users_default_groups: []
+
+# true dodaje grupe na postojece; false ih ZAMENJUJE, cime nalog gubi
+# clanstvo u svemu sto nije navedeno. Podrazumevano je aditivno.
+#
+role_users_append_groups: true
+
+role_users_create_home: true
+
+# Dozvole nad kucnim folderom. Prazna vrednost znaci "ne diraj" i
+# prepusta odluku sistemu.
+#
+# Ubuntu podrazumevano kreira 0755, sto znaci da svaki nalog na masini
+# moze da cita tudje kucne foldere. Postavi 0750 ako to nije prihvatljivo.
+#
+role_users_home_mode: ""
+
+# Kada je nalog vec kreiran a hes lozinke se u medjuvremenu promenio:
+#
+#   always      — Ansible nametne zadati hes pri svakom pokretanju.
+#                 Lozinka koju je korisnik sam promenio bice vracena.
+#   on_create   — hes vazi samo pri kreiranju naloga; kasnije izmene
+#                 na sistemu ostaju.
+#
+# Podrazumevano je always, u skladu sa ostatkom repozitorijuma: sto je
+# opisano u inventory-ju, to je stanje na sistemu.
+#
+role_users_update_password: always
+
+
+# =====================================================================
+# SSH KLJUCEVI
+# =====================================================================
+
+# Kada je true, iz authorized_keys se uklanjaju svi kljucevi koji nisu
+# navedeni u ssh_keys tog naloga.
+#
+# PAZNJA: rucno dodati kljucevi bice obrisani. Korisno pri rotaciji
+# kljuceva, opasno u svakodnevnom radu.
+#
+role_users_ssh_key_exclusive: false
+
+
+# =====================================================================
+# SUDO
+# =====================================================================
+# Pravilo se upisuje u zaseban fajl u /etc/sudoers.d/, nikada u
+# /etc/sudoers direktno. Sadrzaj se pre upisa proverava visudo-om —
+# neispravan fajl u sudoers.d moze onesposobiti sudo na celom sistemu.
+
+# Globalni prekidac. Kada je false, rola ne dira /etc/sudoers.d uopste,
+# bez obzira na polje sudo pojedinacnih naloga.
+#
+role_users_sudo_enabled: true
+
+# Ime fajla je prefiks + ime naloga:
+#   /etc/sudoers.d/user-milan
+#
+# NAPOMENA: sudo ignorise fajlove cije ime sadrzi tacku ili se zavrsava
+# tildom. Rola zato iz imena naloga uklanja sve osim slova, cifara,
+# crte i donje crte.
+#
+role_users_sudo_file_prefix: "user-"
+
+# Komande za nalog koji ima sudo: true. ALL znaci pun pristup.
+#
+role_users_sudo_commands: ALL
+
+# Sudo bez lozinke. Za ljudske naloge je razumno postaviti false i
+# traziti lozinku; za servisne naloge je NOPASSWD po pravilu neophodan.
+#
+role_users_sudo_nopasswd: false
+
+
+# =====================================================================
+# BRISANJE NALOGA
+# =====================================================================
+
+# Kada je true, brisanje naloga uklanja i kucni folder sa celim
+# sadrzajem.
+#
+# NEPOVRATNO. Podrazumevano false — nalog nestaje, podaci ostaju, pa
+# se mogu arhivirati ili predati nekome.
+#
+role_users_remove_home: false
+
+# Nalozi koji se ne smeju obrisati. Rola prekida rad ako se neko od
+# njih nadje sa state: absent.
+#
+# Nalog pod kojim se Ansible povezuje se dodaje automatski — brisanje
+# tog naloga bi prekinulo vezu usred pokretanja i ostavilo host
+# nedostupnim.
+#
+role_users_protected:
+  - root
+  - daemon
+  - bin
+  - sys
+  - sync
+  - nobody
