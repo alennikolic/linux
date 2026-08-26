@@ -3,33 +3,35 @@
 #
 # Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
 # group_vars ili host_vars.
+#
+# Posle prelaska na iskljucivo MySQL ovde vise nema uslovnih izraza:
+# sve vrednosti su fiksne. Fajl ostaje zato sto je ovo javni ugovor
+# role — putanje i imena servisa nisu podesavanja, pa nemaju sta da
+# traze u defaults/main.yml.
 
-_zabbix_db_server_package: >-
-  {{ 'mariadb-server' if role_zabbix_db_engine == 'mariadb'
-     else 'mysql-server' }}
+_zabbix_db_server_package: mysql-server
 
-_zabbix_db_service: >-
-  {{ 'mariadb' if role_zabbix_db_engine == 'mariadb' else 'mysql' }}
+# Klijent je potreban za uvoz seme. Paket mysql-server ga povlaci sam,
+# pa se instalira zasebno samo kada instalacija servera nije trazena.
+_zabbix_db_client_package: mysql-client
 
-# MySQL na Ubuntu koristi /etc/mysql/mysql.conf.d/,
-# MariaDB /etc/mysql/mariadb.conf.d/
-_zabbix_db_config_dir: >-
-  {{ '/etc/mysql/mariadb.conf.d' if role_zabbix_db_engine == 'mariadb'
-     else '/etc/mysql/mysql.conf.d' }}
+_zabbix_db_service: mysql
 
-_zabbix_db_config_file: "{{ _zabbix_db_config_dir }}/99-zabbix.cnf"
+# MySQL na Ubuntu cita /etc/mysql/mysql.conf.d/
+_zabbix_db_config_dir: /etc/mysql/mysql.conf.d
+
+# Prefiks zz- je bitan, ne kozmeticki. MySQL ucitava fajlove iz ovog
+# foldera AZBUCNIM redom i primenjuje POSLEDNJU procitanu vrednost
+# svake opcije. Ime koje pocinje ciframa (99-zabbix.cnf) dolazi PRE
+# mysqld.cnf, pa bi bind-address odavde bio pregazen. Suprotno od
+# ponasanja systemd-a, sysctl-a i logrotate-a.
+_zabbix_db_config_file: "{{ _zabbix_db_config_dir }}/zz-zabbix.cnf"
 
 # Socket kroz koji se Ansible prijavljuje kao root. Na Ubuntu i
-# Debianu root koristi auth_socket, pa lozinka nije potrebna.
+# Debianu root koristi auth_socket dodatak, pa lozinka nije potrebna.
+# Ovo je i razlog zasto uvoz seme radi iz ove role: root ima punu
+# privilegiju, za razliku od naloga "zabbix".
 _zabbix_db_login_socket: /run/mysqld/mysqld.sock
 
-# Efektivna lista hostova za nalog Zabbix servera.
-#
-# Nova lista ima prednost; stara jednoclana varijabla se koristi samo
-# kada je lista prazna. Time postojeca podesavanja nastavljaju da rade
-# bez izmene.
-#
-# Izraz je napisan u jednom redu namerno: Ansible cuva tip vrednosti
-# samo kada je cela vrednost jedan Jinja izraz. Prelomljen u vise
-# redova rezultat bi bio string umesto liste.
-_zabbix_db_server_user_hosts: "{{ role_zabbix_db_server_user_hosts if (role_zabbix_db_server_user_hosts | length > 0) else [role_zabbix_db_user_host] }}"
+# Folder u koji paket zabbix-sql-scripts raspakuje semu.
+_zabbix_db_sql_scripts_dir: /usr/share/zabbix-sql-scripts/mysql
