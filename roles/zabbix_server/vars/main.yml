@@ -3,21 +3,13 @@
 #
 # Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
 # group_vars ili host_vars.
+#
+# Otkad semu uvozi rola "zabbix_db", ovoj roli vise ne treba ni
+# klijentski paket baze ni putanja do .sql skripte. Ostalo je samo
+# ime paketa, servisa i konfiguracionog fajla.
 
 # zabbix-server-mysql / zabbix-server-pgsql
 _zabbix_server_package: "zabbix-server-{{ role_zabbix_server_db_backend }}"
-
-# Klijentski paket potreban za uvoz seme sa ovog hosta.
-_zabbix_server_db_client_package: >-
-  {{ 'postgresql-client'
-     if role_zabbix_server_db_backend == 'pgsql'
-     else 'mysql-client' }}
-
-# Putanja .sql skripte iz paketa zabbix-sql-scripts.
-_zabbix_server_schema_file: >-
-  {{ '/usr/share/zabbix-sql-scripts/postgresql/server.sql.gz'
-     if role_zabbix_server_db_backend == 'pgsql'
-     else '/usr/share/zabbix-sql-scripts/mysql/server.sql.gz' }}
 
 _zabbix_server_service: zabbix-server
 _zabbix_server_config_file: /etc/zabbix/zabbix_server.conf
