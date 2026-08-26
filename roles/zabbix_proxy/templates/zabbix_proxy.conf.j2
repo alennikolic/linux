@@ -1,0 +1,77 @@
+{{ '#' }} {{ _zabbix_proxy_config_file }}
+{{ '#' }}
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: zabbix_proxy
+{{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+
+{{ '#' }} --- Identitet i rezim ------------------------------------------
+ProxyMode={{ role_zabbix_proxy_mode }}
+Hostname={{ role_zabbix_proxy_hostname }}
+Server={{ role_zabbix_proxy_server }}
+
+PidFile=/run/zabbix/zabbix_proxy.pid
+SocketDir=/run/zabbix
+
+{{ '#' }} --- Logovanje --------------------------------------------------
+LogFile={{ role_zabbix_proxy_logfile }}
+LogFileSize={{ role_zabbix_proxy_logfile_size }}
+DebugLevel={{ role_zabbix_proxy_debug_level }}
+
+{{ '#' }} --- Baza -------------------------------------------------------
+DBName={{ role_zabbix_proxy_db_name }}
+{% if not _zabbix_proxy_uses_sqlite | bool %}
+DBHost={{ role_zabbix_proxy_db_host }}
+DBUser={{ role_zabbix_proxy_db_user }}
+DBPassword={{ role_zabbix_proxy_db_password }}
+{% if role_zabbix_proxy_db_host not in ['', 'localhost'] %}
+DBPort={{ role_zabbix_proxy_db_port }}
+{% endif %}
+{% endif %}
+
+{{ '#' }} --- Mreza ------------------------------------------------------
+ListenPort={{ role_zabbix_proxy_listen_port }}
+{% if role_zabbix_proxy_listen_ip | length > 0 %}
+ListenIP={{ role_zabbix_proxy_listen_ip }}
+{% endif %}
+
+{{ '#' }} --- Cuvanje i slanje podataka ----------------------------------
+ProxyOfflineBuffer={{ role_zabbix_proxy_offline_buffer }}
+ProxyLocalBuffer={{ role_zabbix_proxy_local_buffer }}
+{% if role_zabbix_proxy_mode | int == 0 %}
+ProxyConfigFrequency={{ role_zabbix_proxy_config_frequency }}
+DataSenderFrequency={{ role_zabbix_proxy_data_sender_frequency }}
+{% endif %}
+
+{{ '#' }} --- Procesi ----------------------------------------------------
+StartPollers={{ role_zabbix_proxy_start_pollers }}
+StartPollersUnreachable={{ role_zabbix_proxy_start_pollers_unreachable }}
+StartTrappers={{ role_zabbix_proxy_start_trappers }}
+StartPingers={{ role_zabbix_proxy_start_pingers }}
+StartDiscoverers={{ role_zabbix_proxy_start_discoverers }}
+StartHTTPPollers={{ role_zabbix_proxy_start_http_pollers }}
+StartPreprocessors={{ role_zabbix_proxy_start_preprocessors }}
+
+{{ '#' }} --- Kesevi -----------------------------------------------------
+CacheSize={{ role_zabbix_proxy_cache_size }}
+HistoryCacheSize={{ role_zabbix_proxy_history_cache_size }}
+HistoryIndexCacheSize={{ role_zabbix_proxy_history_index_cache_size }}
+
+{{ '#' }} --- Putanje ----------------------------------------------------
+ExternalScripts={{ role_zabbix_proxy_external_scripts }}
+FpingLocation={{ role_zabbix_proxy_fping_location }}
+Timeout={{ role_zabbix_proxy_timeout }}
+
+{{ '#' }} --- Statistika -------------------------------------------------
+StatsAllowedIP={{ role_zabbix_proxy_stats_allowed_ip }}
+
+{{ '#' }} --- TLS --------------------------------------------------------
+TLSConnect={{ role_zabbix_proxy_tls_connect }}
+TLSAccept={{ role_zabbix_proxy_tls_accept }}
+{% if role_zabbix_proxy_tls_connect == 'psk' or role_zabbix_proxy_tls_accept == 'psk' %}
+TLSPSKIdentity={{ role_zabbix_proxy_tls_psk_identity }}
+TLSPSKFile={{ role_zabbix_proxy_tls_psk_file }}
+{% endif %}
+{% if role_zabbix_proxy_extra_config | length > 0 %}
+
+{{ '#' }} --- Dodatna konfiguracija --------------------------------------
+{{ role_zabbix_proxy_extra_config }}
+{% endif %}
