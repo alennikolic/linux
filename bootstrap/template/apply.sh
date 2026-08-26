@@ -7,12 +7,19 @@
 #
 # Svi argumenti se prosledjuju direktno ansible-playbook komandi:
 #
-#   ./apply.sh                                  # sve role, svi hostovi
-#   ./apply.sh --check --diff                   # provera bez izmena
-#   ./apply.sh --limit srv-web-01               # jedan host
-#   ./apply.sh --limit apply_banner             # jedna grupa
-#   ./apply.sh --limit '!apply_system_update'   # sve osim jedne grupe
-#   ./apply.sh -vv                              # detaljan ispis
+#   ./apply.sh                            # sve role, svi hostovi
+#   ./apply.sh --check --diff             # provera bez izmena
+#   ./apply.sh --limit srv-web-01         # jedan host
+#   ./apply.sh --limit apply_banner       # jedna grupa
+#   ./apply.sh --limit '!apply_updates'   # sve osim jedne grupe
+#   ./apply.sh -vv                        # detaljan ispis
+#
+# NAPOMENA: playbooks/bootstrap.yml se NE pokrece kroz ovu skriptu.
+# Priprema sveze instaliranog servera ide zasebno, pod postojecim
+# nalogom:
+#
+#   ansible-playbook ../linux/playbooks/bootstrap.yml \
+#     --limit <host> --user root --ask-pass --ask-become-pass
 
 set -euo pipefail
 
