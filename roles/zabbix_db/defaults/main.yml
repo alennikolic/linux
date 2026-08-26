@@ -60,9 +60,10 @@ role_zabbix_db_name: zabbix
 # =====================================================================
 # KORISNIK ZA ZABBIX SERVER
 # =====================================================================
-# Ovaj nalog dobija ALL na svojoj bazi. To je vise nego sto server
-# treba u svakodnevnom radu, ali je neophodno za uvoz seme i za
-# nadogradnju baze pri prelasku na noviju verziju Zabbix-a.
+# Ovaj nalog koristi Zabbix SERVER i dobija ALL na svojoj bazi. To je
+# vise nego sto server treba u svakodnevnom radu, ali je neophodno za
+# uvoz seme i za nadogradnju baze pri prelasku na noviju verziju
+# Zabbix-a.
 #
 role_zabbix_db_user: zabbix
 
@@ -91,24 +92,28 @@ role_zabbix_db_password: ""
 #   %              — bilo odakle (NE preporucuje se)
 #
 # Zadrzano zbog kompatibilnosti sa ranijim podesavanjima. Koristi se
-# SAMO ako je role_zabbix_db_user_hosts prazna lista.
+# SAMO ako je role_zabbix_db_server_user_hosts prazna lista.
 #
 role_zabbix_db_user_host: localhost
 
-# Lista hostova sa kojih se korisnik sme prijaviti.
+# Lista hostova sa kojih se Zabbix SERVER sme prijaviti na bazu.
 #
 # U MySQL-u nalog nije samo ime nego par korisnik@host. Isto ime sa
 # dve adrese su DVA naloga, sa zasebnim privilegijama i zasebnim
 # hesom lozinke. Rola pravi po jedan nalog za svaku stavku liste,
 # sa istom lozinkom i istim privilegijama.
 #
-# Ima prednost nad role_zabbix_db_user_host kada nije prazna:
+# Ima prednost nad role_zabbix_db_user_host kada nije prazna. Korisno
+# kada postoji vise Zabbix servera nad istom bazom, ili kada se
+# server seli na drugu adresu pa obe moraju vaziti tokom prelaza:
 #
-#   role_zabbix_db_user_hosts:
+#   role_zabbix_db_server_user_hosts:
 #     - "10.0.0.50"
 #     - "10.0.0.51"
 #
-role_zabbix_db_user_hosts: []
+# Za frontend NE koristi ovu listu — on ima sopstveni nalog nize.
+#
+role_zabbix_db_server_user_hosts: []
 
 
 # =====================================================================
@@ -139,7 +144,7 @@ role_zabbix_db_frontend_user: zabbix_web
 role_zabbix_db_frontend_password: ""
 
 # OBAVEZNO kada je role_zabbix_db_frontend_enabled true.
-# Lista, po istom pravilu kao role_zabbix_db_user_hosts.
+# Lista, po istom pravilu kao role_zabbix_db_server_user_hosts.
 #
 #   role_zabbix_db_frontend_user_hosts:
 #     - "10.0.0.60"
