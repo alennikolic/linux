@@ -9,7 +9,7 @@
 # role_zabbix_db_enabled.
 #
 # PODELA POSLA SA ROLOM zabbix_server:
-#   zabbix_db      — instalira bazu, kreira PRAZNU bazu i korisnika
+#   zabbix_db      — instalira bazu, kreira PRAZNU bazu i korisnike
 #   zabbix_server  — uvozi semu (skripte dolaze uz njegov paket)
 #
 # Rola NE uvozi semu i NE dira postojece podatke. Bezbedno je
@@ -44,17 +44,26 @@ role_zabbix_db_enabled: false
 role_zabbix_db_engine: mysql
 
 # Kada je false, rola preskace instalaciju paketa i samo kreira bazu
-# i korisnika. Koristi kada bazom upravlja neko drugi ili kada je
+# i korisnike. Koristi kada bazom upravlja neko drugi ili kada je
 # vec instalirana.
 #
 role_zabbix_db_install_server: true
 
 
 # =====================================================================
-# BAZA I KORISNIK
+# BAZA
 # =====================================================================
 
 role_zabbix_db_name: zabbix
+
+
+# =====================================================================
+# KORISNIK ZA ZABBIX SERVER
+# =====================================================================
+# Ovaj nalog dobija ALL na svojoj bazi. To je vise nego sto server
+# treba u svakodnevnom radu, ali je neophodno za uvoz seme i za
+# nadogradnju baze pri prelasku na noviju verziju Zabbix-a.
+#
 role_zabbix_db_user: zabbix
 
 # OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
@@ -74,14 +83,80 @@ role_zabbix_db_user: zabbix
 #
 role_zabbix_db_password: ""
 
-# Sa kog hosta se korisnik sme prijaviti.
+# Sa kog hosta se korisnik sme prijaviti — JEDNA vrednost.
 #
 #   localhost      — baza i server na istom hostu (podrazumevano)
 #   10.0.0.50      — Zabbix server na drugom hostu
 #   10.0.0.%       — cela podmreza
 #   %              — bilo odakle (NE preporucuje se)
 #
+# Zadrzano zbog kompatibilnosti sa ranijim podesavanjima. Koristi se
+# SAMO ako je role_zabbix_db_user_hosts prazna lista.
+#
 role_zabbix_db_user_host: localhost
+
+# Lista hostova sa kojih se korisnik sme prijaviti.
+#
+# U MySQL-u nalog nije samo ime nego par korisnik@host. Isto ime sa
+# dve adrese su DVA naloga, sa zasebnim privilegijama i zasebnim
+# hesom lozinke. Rola pravi po jedan nalog za svaku stavku liste,
+# sa istom lozinkom i istim privilegijama.
+#
+# Ima prednost nad role_zabbix_db_user_host kada nije prazna:
+#
+#   role_zabbix_db_user_hosts:
+#     - "10.0.0.50"
+#     - "10.0.0.51"
+#
+role_zabbix_db_user_hosts: []
+
+
+# =====================================================================
+# KORISNIK ZA FRONTEND
+# =====================================================================
+# Frontend cita bazu DIREKTNO, ne kroz Zabbix server, pa mu treba
+# sopstveni pristup. Ne treba mu ALL — ne uvozi semu i ne menja
+# strukturu tabela.
+#
+# Kada je false, rola ovaj nalog uopste ne dira. Frontend tada mora
+# koristiti nalog Zabbix servera, sto radi ali daje frontendu vise
+# prava nego sto mu treba.
+#
+role_zabbix_db_frontend_enabled: false
+
+# Ime naloga. Mora se razlikovati od role_zabbix_db_user — rola to
+# proverava. Isto ime sa razlicitim pravima po hostu je dozvoljeno u
+# MySQL-u, ali se iz poruke o gresci ne vidi koji je nalog upotrebljen.
+#
+role_zabbix_db_frontend_user: zabbix_web
+
+# OBAVEZNO kada je role_zabbix_db_frontend_enabled true.
+#
+# Zasebna lozinka, ne ista kao lozinka servera — inace nalog gubi
+# smisao. Ista vrednost ide u role_zabbix_web_db_password na hostu
+# frontenda.
+#
+role_zabbix_db_frontend_password: ""
+
+# OBAVEZNO kada je role_zabbix_db_frontend_enabled true.
+# Lista, po istom pravilu kao role_zabbix_db_user_hosts.
+#
+#   role_zabbix_db_frontend_user_hosts:
+#     - "10.0.0.60"
+#
+role_zabbix_db_frontend_user_hosts: []
+
+# Privilegije frontenda nad bazom.
+#
+# SELECT,INSERT,UPDATE,DELETE je tacno ono sto Zabbix frontend
+# koristi: cita podatke, upisuje sesije i profile korisnika, menja
+# konfiguraciju kroz interfejs, brise objekte.
+#
+# Privilegija se dodeljuje na nivou BAZE (zabbix.*), ne po tabeli,
+# da bi nove tabele iz buduce verzije Zabbix-a automatski bile
+# pokrivene.
+#
+role_zabbix_db_frontend_priv: "SELECT,INSERT,UPDATE,DELETE"
 
 
 # =====================================================================
@@ -103,8 +178,8 @@ role_zabbix_db_collation: utf8mb4_bin
 # Adresa na kojoj baza slusa.
 #
 #   127.0.0.1  — samo lokalno (podrazumevano, najbezbednije)
-#   0.0.0.0    — sve adrese, potrebno kada je Zabbix server na
-#                drugom hostu
+#   0.0.0.0    — sve adrese, potrebno kada su Zabbix server ili
+#                frontend na drugom hostu
 #
 # PAZNJA: uz 0.0.0.0 obavezno ogranici pristup kroz rolu "firewall".
 # Baza otvorena prema celoj mrezi je ozbiljan rizik.
@@ -143,14 +218,14 @@ role_zabbix_db_innodb_flush_log_at_trx_commit: 2
 # Maksimalan broj konekcija.
 #
 # PAZNJA: mora biti veci od zbira svih Start* procesa Zabbix servera,
-# uz rezervu za frontend i rucne prijave.
+# uz rezervu za frontend i rucne prijave. Sa zasebnim nalogom za
+# frontend broj konekcija se ne menja — menja se samo ko ih otvara.
 role_zabbix_db_max_connections: 200
 
-# Najveci paket koji baza prihvata. Zabbix ume da salje velike
-# upite pri masovnom upisu.
+# Najveci pojedinacni upit koji baza prihvata.
 role_zabbix_db_max_allowed_packet: 64M
 
-# Proizvoljne dodatne linije u konfiguraciji.
+# Proizvoljne linije koje se dodaju u 99-zabbix.cnf.
 #
 #   role_zabbix_db_extra_config: |
 #     innodb_io_capacity = 2000
