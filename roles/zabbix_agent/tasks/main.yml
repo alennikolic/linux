@@ -7,6 +7,12 @@
 #   3. PSK kljuc (opciono)
 #   4. Konfiguracioni fajl
 #   5. Servis
+#
+# Uslovi nad varijablama iz defaults/main.yml namerno koriste
+# default() filter. Ansible nedefinisanu varijablu u "when" ili
+# "that" izrazu ne tretira kao netacnu — prekida rad. Bez filtera
+# nepotpun defaults/main.yml rusi rolu usred izvrsavanja, umesto da
+# se ponasa kao da opcija nije podesena.
 
 - name: "Instalacija i konfiguracija Zabbix agenta"
   block:
@@ -28,8 +34,7 @@
     - name: "Provera da je adresa servera zadata"
       ansible.builtin.assert:
         that:
-          - role_zabbix_agent_server is defined
-          - role_zabbix_agent_server | length > 0
+          - role_zabbix_agent_server | default('') | length > 0
         fail_msg: >-
           role_zabbix_agent_server nije popunjen. Upisi adresu Zabbix
           servera ili proxy-ja u group_vars/all.yml pre pokretanja.
@@ -40,49 +45,70 @@
     - name: "Provera izbora agenta"
       ansible.builtin.assert:
         that:
-          - role_zabbix_agent_package in ['zabbix-agent', 'zabbix-agent2']
+          - role_zabbix_agent_package | default('') in ['zabbix-agent', 'zabbix-agent2']
         fail_msg: >-
           role_zabbix_agent_package mora biti "zabbix-agent" ili
           "zabbix-agent2", a zadato je
-          "{{ role_zabbix_agent_package }}".
+          "{{ role_zabbix_agent_package | default('prazno') }}".
         success_msg: "Izbor agenta je ispravan."
 
     # TLS bez kljuca bi proizveo konfiguraciju koju agent odbija da
     # ucita, pa servis ne bi startovao.
+    #
+    # TLSAccept sme sadrzati vise vrednosti razdvojenih zarezom
+    # ("unencrypted,psk"), pa se proverava pripadnost a ne jednakost.
     - name: "Provera PSK konfiguracije"
       ansible.builtin.assert:
         that:
-          - role_zabbix_agent_tls_psk_identity | length > 0
-          - role_zabbix_agent_tls_psk | length > 0
+          - role_zabbix_agent_tls_psk_identity | default('') | length > 0
+          - role_zabbix_agent_tls_psk | default('') | length > 0
         fail_msg: >-
           TLS je postavljen na "psk", ali nedostaje
           role_zabbix_agent_tls_psk_identity ili
           role_zabbix_agent_tls_psk. Kljuc generisi sa:
           openssl rand -hex 32
         success_msg: "PSK konfiguracija je potpuna."
+      no_log: true
       when: >-
-        role_zabbix_agent_tls_connect == 'psk' or
-        role_zabbix_agent_tls_accept == 'psk'
+        'psk' in (role_zabbix_agent_tls_connect | default('unencrypted'))
+        or 'psk' in (role_zabbix_agent_tls_accept | default('unencrypted'))
 
     # -----------------------------------------------------------------
     # 2. Instalacija
     # -----------------------------------------------------------------
     # Ako paket nije dostupan, gotovo uvek znaci da Zabbix
-    # repozitorijum nije dodat — poruka na to i upucuje.
+    # repozitorijum nije dodat. Originalna apt greska ostaje u ispisu,
+    # a rescue grana ispod dodaje objasnjenje sta proveriti.
 
-    - name: "Instalacija paketa {{ role_zabbix_agent_package }}"
-      ansible.builtin.apt:
-        name: >-
-          {{ role_zabbix_agent_package }}{{
-             '=' ~ role_zabbix_agent_version
-             if role_zabbix_agent_version | length > 0 else '' }}
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-      register: _agent_install
-      failed_when:
-        - _agent_install is failed
-      notify: "Restartuj Zabbix agenta"
+    - name: "Instalacija Zabbix agenta"
+      block:
+
+        - name: "Instalacija paketa {{ role_zabbix_agent_package }}"
+          ansible.builtin.apt:
+            name: >-
+              {{ role_zabbix_agent_package }}{{
+                 '=' ~ role_zabbix_agent_version
+                 if role_zabbix_agent_version | default('') | length > 0
+                 else '' }}
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+          notify: "Restartuj Zabbix agenta"
+
+      rescue:
+
+        - name: "Objasnjenje neuspele instalacije"
+          ansible.builtin.fail:
+            msg: >-
+              Instalacija paketa "{{ role_zabbix_agent_package }}" nije
+              uspela. Najcesci uzrok je da Zabbix repozitorijum nije
+              dodat — host mora biti i u grupi [apply_repos], a
+              apply_repos mora ici pre deploy_zabbix_agent u
+              playbook.yml. Proveri sa:
+              apt-cache policy {{ role_zabbix_agent_package }}
+              Drugi mogucnost je zakovana verzija koja u
+              repozitorijumu ne postoji; dostupne vidis sa:
+              apt-cache madison {{ role_zabbix_agent_package }}
 
     # -----------------------------------------------------------------
     # 3. PSK kljuc
@@ -99,8 +125,8 @@
         mode: '0400'
       no_log: true
       when: >-
-        role_zabbix_agent_tls_connect == 'psk' or
-        role_zabbix_agent_tls_accept == 'psk'
+        'psk' in (role_zabbix_agent_tls_connect | default('unencrypted'))
+        or 'psk' in (role_zabbix_agent_tls_accept | default('unencrypted'))
       notify: "Restartuj Zabbix agenta"
 
     # -----------------------------------------------------------------
@@ -132,7 +158,7 @@
     - name: "Servis {{ _zabbix_agent_service }}"
       ansible.builtin.service:
         name: "{{ _zabbix_agent_service }}"
-        enabled: "{{ role_zabbix_agent_service_enabled | bool }}"
-        state: "{{ role_zabbix_agent_service_state }}"
+        enabled: "{{ role_zabbix_agent_service_enabled | default(true) | bool }}"
+        state: "{{ role_zabbix_agent_service_state | default('started') }}"
 
   when: role_zabbix_agent_enabled | default(false) | bool
