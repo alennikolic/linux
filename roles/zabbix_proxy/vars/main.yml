@@ -20,6 +20,14 @@ _zabbix_proxy_dropin_path: >-
 # ne samo nad fajlom - SQLite pravi i -journal / -wal fajlove pored baze.
 _zabbix_proxy_db_dir: "{{ role_zabbix_proxy_db_name | dirname }}"
 
+# Koliko sekundi rola ceka da proxy zavrsi pravljenje SQLite seme pre nego
+# sto dozvoli restart. Na svezem hostu kreiranje traje nekoliko sekundi do
+# minut, zavisno od brzine diska.
+#
+# Nije javna varijabla: vrednost je tehnicka, a produzavanje ne resava nista
+# ako je pravi problem drugde (nedostupan folder, ostecena baza).
+_zabbix_proxy_db_init_timeout: 180
+
 # Server prihvata string ili listu; Zabbix ocekuje jednu liniju sa
 # vrednostima razdvojenim zarezom.
 _zabbix_proxy_server_value: >-
