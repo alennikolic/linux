@@ -1,281 +1,207 @@
-# Rola: zabbix_agent
+<!-- roles/zabbix_agent/README.md -->
 
-Instalira i konfiguriše Zabbix agenta na Debian/Ubuntu sistemima.
+# Rola: `zabbix_agent`
 
-Podržana su oba agenta — klasični `zabbix-agent` i noviji `zabbix-agent2`. Izbor je jedna varijabla; rola sama izvodi ime servisa, putanju konfiguracije i include folder.
+Instalira Zabbix agenta (`zabbix-agent` ili `zabbix-agent2`) i upisuje
+konfiguraciju kao **drop-in fajl** u include direktorijum koji paket već
+predviđa. Podrazumevani `zabbix_agentd.conf` ostaje netaknut.
 
----
+## Zašto drop-in
 
-## Preduslov: repozitorijum
+`/etc/zabbix/zabbix_agentd.conf` je dpkg *conffile*. Rola koja ga prepisuje u
+celosti stvara dva problema:
 
-Zabbix agent ne postoji u sistemskim Ubuntu izvorima u aktuelnoj verziji. Pre ove role host mora proći kroz rolu `repos`:
+- svaka nadogradnja paketa završava u konfliktu ili tiho zadržava našu
+  verziju, pa nove opcije koje vendor doda nikada ne stignu na sistem;
+- razlika između našeg i fabričkog fajla postaje neproverljiva.
 
-```ini
-[apply_repos]
-srv-web-01
+Zabbix obrađuje `Include` direktivu u trenutku kada je pročita, a u paketima
+ona stoji na kraju fajla. Posledica: parametar definisan u drop-in fajlu
+nadjačava isti parametar iz podrazumevane konfiguracije. To je zvanično
+podržan mehanizam, ne trik.
 
-[deploy_zabbix_agent]
-srv-web-01
-```
+## Preduslovi
 
-```yaml
-# group_vars/all.yml
-role_repos_list:
-  - name: zabbix
-    uris: "https://repo.zabbix.com/zabbix/7.0/ubuntu"
-    suites: "{{ ansible_distribution_release }}"
-    components: [main]
-    signed_by: "https://repo.zabbix.com/zabbix-official-repo.key"
-```
-
-U `playbook.yml` `apply_repos` ide pre `deploy_zabbix_agent`, pa je redosled ispravan i pri jednom pokretanju.
-
----
+- Ubuntu 22.04+ ili Debian 11+
+- Zabbix APT repozitorijum dodat — rola `repos`
+- Bez dodatnih kolekcija (koriste se samo `ansible.builtin` moduli)
 
 ## Aktivacija
 
 ```ini
-# inventory/hosts.ini
 [deploy_zabbix_agent]
 srv-web-01
-srv-web-02
+srv-db-01
 ```
-
-Grupi pripada `group_vars/deploy_zabbix_agent.yml`, koji postavlja `role_zabbix_agent_enabled: true`. Taj fajl ne treba dirati.
-
-Kaskadno, ako agent ide na sve servere:
-
-```ini
-[deploy_zabbix_agent:children]
-webservers
-dbservers
-```
-
----
-
-## Obavezna konfiguracija
 
 ```yaml
-# group_vars/all.yml
-role_zabbix_agent_server: "10.0.0.50"
+# group_vars/deploy_zabbix_agent.yml
+role_zabbix_agent_enabled: true
 ```
-
-Bez ovoga rola prekida rad na prvoj proveri. Agent bi inače bio instaliran, ali ne bi imao kome da se javi.
-
----
 
 ## Varijable
 
-### Aktivacija i izbor agenta
-
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_agent_enabled` | `false` | Kada je `false`, rola ne dira ništa. |
-| `role_zabbix_agent_package` | `zabbix-agent` | Ili `zabbix-agent2`. |
-| `role_zabbix_agent_version` | `""` | Zakovana verzija. Prazno = najnovija. |
+| `role_zabbix_agent_enabled` | `false` | Prekidač role |
+| `role_zabbix_agent_variant` | `agent` | `agent` ili `agent2` |
+| `role_zabbix_agent_package_state` | `present` | `present` ili `latest` |
+| `role_zabbix_agent_server` | `""` | Adrese za pasivne provere (string ili lista) |
+| `role_zabbix_agent_server_active` | `""` | Adrese za aktivne provere, `host:port` |
+| `role_zabbix_agent_hostname` | `{{ inventory_hostname }}` | Ime hosta u Zabbix-u |
+| `role_zabbix_agent_config` | `{}` | Slobodan rečnik ostalih parametara |
+| `role_zabbix_agent_extra_config` | `""` | Doslovan tekst na kraju fajla |
+| `role_zabbix_agent_tls_psk` | `""` | PSK, heksadecimalno; prazno = bez TLS-a |
+| `role_zabbix_agent_tls_psk_identity` | `PSK {{ inventory_hostname }}` | Identitet PSK-a |
+| `role_zabbix_agent_tls_psk_file` | `/etc/zabbix/zabbix_agent.psk` | Putanja PSK fajla |
+| `role_zabbix_agent_dropin_name` | `zz-ansible.conf` | Ime drop-in fajla |
+| `role_zabbix_agent_include_dir` | `""` | Ručno zadata putanja; prazno = automatska detekcija |
+| `role_zabbix_agent_include_strict` | `true` | Prekid ako u include direktorijumu ima rezervnih kopija |
+| `role_zabbix_agent_service_enabled` | `true` | Servis omogućen pri podizanju sistema |
+| `role_zabbix_agent_service_state` | `started` | Ciljno stanje servisa |
 
-### Veza sa serverom
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_agent_server` | `""` | **Obavezno.** Odakle se prihvataju pasivne provere. |
-| `role_zabbix_agent_server_active` | isto kao `_server` | Kome se šalju aktivne provere. |
-| `role_zabbix_agent_hostname` | `{{ inventory_hostname }}` | Ime pod kojim se agent predstavlja. |
-| `role_zabbix_agent_host_metadata` | `""` | Metapodaci za automatsku registraciju. |
-
-### Mreža
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_agent_listen_port` | `10050` | Port na kojem agent sluša. |
-| `role_zabbix_agent_listen_ip` | `""` | Prazno = sve adrese. |
-| `role_zabbix_agent_timeout` | `3` | Sekunde. Zabbix 7.0 dozvoljava do 30. |
-
-### Logovanje
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_agent_logfile` | `/var/log/zabbix/zabbix_agentd.log` | Putanja log fajla. |
-| `role_zabbix_agent_logfile_size` | `10` | MB. Nula isključuje rotaciju agenta. |
-| `role_zabbix_agent_debug_level` | `3` | 0–5. Nivoi 4 i 5 brzo pune disk. |
-
-### Dozvoljeni ključevi
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_agent_allow_keys` | `[]` | Izuzeci od zabrane. |
-| `role_zabbix_agent_deny_keys` | `["system.run[*]"]` | Zabranjeni ključevi. |
-
-### TLS
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_agent_tls_connect` | `unencrypted` | `unencrypted`, `psk` ili `cert`. |
-| `role_zabbix_agent_tls_accept` | `unencrypted` | Isto. |
-| `role_zabbix_agent_tls_psk_identity` | `""` | Identitet PSK ključa. |
-| `role_zabbix_agent_tls_psk` | `""` | Sam ključ. **Tajna** — ide u vault. |
-| `role_zabbix_agent_tls_psk_file` | `/etc/zabbix/zabbix_agent.psk` | Gde se ključ upisuje. |
-
-### Ostalo
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_agent_extra_config` | `""` | Proizvoljne linije na kraju konfiguracije. |
-| `role_zabbix_agent_service_enabled` | `true` | Startuje uz sistem. |
-| `role_zabbix_agent_service_state` | `started` | `started`, `stopped`. |
-
----
+Ključevi `Server`, `ServerActive`, `Hostname` i `TLS*` su rezervisani i ne
+smeju se pojaviti u `role_zabbix_agent_config` — `assert` prekida izvršavanje.
 
 ## Primeri
 
-### Osnovna postavka
+Minimalno, aktivne provere:
 
 ```yaml
-# group_vars/all.yml
-role_zabbix_agent_server: "10.0.0.50"
+# group_vars/deploy_zabbix_agent.yml
+role_zabbix_agent_enabled: true
+role_zabbix_agent_server: 10.0.0.10
+role_zabbix_agent_server_active: 10.0.0.10:10051
 ```
 
-To je sve. Hostname se izvodi iz `inventory_hostname`, aktivne provere idu na istu adresu.
-
-### Kroz Zabbix proxy
+Sa dodatnim parametrima i korisničkim proverama:
 
 ```yaml
-# group_vars/all.yml
-role_zabbix_agent_server: "10.0.0.60"
-role_zabbix_agent_server_active: "10.0.0.60:10051"
+role_zabbix_agent_config:
+  Timeout: 10
+  RefreshActiveChecks: 60
+  LogFileSize: 10
+  UserParameter:
+    - "mysql.ping,mysqladmin ping | grep -c alive"
+    - "custom.disk[*],/usr/local/bin/disk.sh $1"
 ```
 
-### Agent2
+`agent2` sa parametrom dodatka:
 
 ```yaml
-role_zabbix_agent_package: zabbix-agent2
-role_zabbix_agent_logfile: /var/log/zabbix/zabbix_agent2.log
+role_zabbix_agent_variant: agent2
+role_zabbix_agent_config:
+  Plugins.Uptime.Capacity: 1
 ```
 
-Putanja loga se ne izvodi automatski — promeni je zajedno sa paketom.
-
-### Automatska registracija
-
-```yaml
-role_zabbix_agent_host_metadata: "linux-production"
-```
-
-Na Zabbix strani napravi akciju koja hostove sa tim metapodatkom automatski dodaje u odgovarajuću grupu i template.
-
-### Šifrovana veza preko PSK
-
-Generiši ključ:
-
-```bash
-openssl rand -hex 32
-```
-
-Šifruj ga:
-
-```bash
-ansible-vault encrypt_string '<psk_hex>' --name 'role_zabbix_agent_tls_psk'
-```
-
-Rezultat upiši u `group_vars/all.yml`:
-
-```yaml
-role_zabbix_agent_tls_connect: psk
-role_zabbix_agent_tls_accept: psk
-role_zabbix_agent_tls_psk_identity: "PSK-produkcija"
-role_zabbix_agent_tls_psk: !vault |
-  $ANSIBLE_VAULT;1.1;AES256
-  38396264...
-```
-
-Isti identitet i ključ moraju biti upisani i na Zabbix strani, u podešavanjima hosta.
-
-### Dozvoljavanje jedne komande
-
-```yaml
-role_zabbix_agent_allow_keys:
-  - "system.run[/usr/local/bin/provera-diska.sh]"
-```
-
-Redosled je bitan: `AllowKey` linije se ispisuju pre `DenyKey`, pa izuzetak važi. Ne dozvoljavaj `system.run[*]` — time Zabbix server dobija mogućnost da izvršava proizvoljne komande na hostu.
-
-### Poseban port
+Izuzetak po hostu:
 
 ```yaml
 # host_vars/srv-db-01.yml
-role_zabbix_agent_listen_port: 10060
+role_zabbix_agent_hostname: srv-db-01.example.com
+role_zabbix_agent_tls_psk: "{{ vault_zabbix_psk_srv_db_01 }}"
 ```
 
-Ne zaboravi da isti port upišeš i na Zabbix strani, u interfejsu hosta.
+Slanje kroz proksi — samo druga adresa, agent ne zna razliku:
 
----
-
-## Napomene
-
-**Rola upisuje sopstvenu konfiguraciju.** Fajl koji dolazi uz paket biva prepisan, uz `backup: true`. Razlog je predvidljivost — kada rola upravlja celim fajlom, sadržaj je uvek tačno ono što je u šablonu. Sporedna korist: nadogradnja paketa ne ostavlja `.dpkg-dist` fajlove za ručno mirenje.
-
-**Ono što treba da preživi rolu ide u include folder:**
-
-```text
-/etc/zabbix/zabbix_agentd.d/*.conf     (zabbix-agent)
-/etc/zabbix/zabbix_agent2.d/*.conf     (zabbix-agent2)
+```yaml
+role_zabbix_agent_server: 10.0.0.20
+role_zabbix_agent_server_active: 10.0.0.20:10051
 ```
 
-Tu paketi za dodatke sami upisuju svoje konfiguracije. Rola taj folder kreira ali njegov sadržaj ne dira.
+## Zamke
 
-**Rola ne otvara port na zaštitnom zidu.** Zabbix server mora moći da dođe do porta 10050 na hostu. To je posao role `firewall`; dve role koje menjaju ista pravila su izvor sukoba.
+**Rezervne kopije u include direktorijumu.** Ako `Include` pokazuje na go
+direktorijum bez `*.conf` maske, Zabbix učitava *svaki* fajl u njemu.
+Zaostali `zz-ansible.conf.dpkg-old` znači dupliran parametar i agenta koji se
+ponaša nepredvidivo. Zato rola ne koristi `backup: true` za drop-in — jedini
+izuzetak od konvencije projekta — i proverava direktorijum kada maske nema.
 
-**Hostname mora da se poklapa.** Ako se `role_zabbix_agent_hostname` razlikuje od imena hosta u Zabbix konfiguraciji, pasivne provere će raditi a aktivne neće — i to bez jasne greške. Podrazumevana vrednost `{{ inventory_hostname }}` znači da je ime iz `hosts.ini` merodavno.
+**Redosled učitavanja nije definisan.** Zabbix ne učitava include fajlove
+abecedno i isti parametar ne sme biti u dva include fajla. Rola zato upisuje
+tačno jedan fajl. Ako dodaješ svoje `.conf` fajlove ručno, ne ponavljaj u
+njima parametre koje rola već ispisuje.
 
-**PSK fajl ima dozvole `0400` i vlasnika `zabbix`.** Agent odbija da startuje ako su dozvole šire. Task koristi `no_log: true`, pa se ključ ne pojavljuje u ispisu.
+**Sintaksna greška ruši agenta.** Neispravan ili nečitljiv include fajl
+sprečava pokretanje. Handler radi `restart`, a ne `reload`, da bi greška bila
+odmah vidljiva.
 
-**Idempotentnost.** Rola je idempotentna. Ponovljeno pokretanje nad nepromenjenom konfiguracijom prijavljuje `ok`, ne `changed`, i ne restartuje servis. Restart se dešava samo kada se paket, konfiguracija ili PSK zaista promene.
+**`Hostname` mora da se poklapa** sa imenom hosta u Zabbix-u. Stock
+konfiguracija ima `Hostname=Zabbix server`, pa bi bez nadjačavanja svi hostovi
+izveštavali pod istim imenom.
 
----
+**Boolean vrednosti.** `true`/`false` iz YAML-a Jinja ispisuje kao
+`True`/`False`, što Zabbix ne razume. Koristi `0` i `1`.
+
+**Prelazak sa stare verzije role.** Serveri koji su već dobili potpuno
+prepisan `zabbix_agentd.conf` neće biti vraćeni na fabrički automatski:
+
+```bash
+apt-get install --reinstall -o Dpkg::Options::="--force-confask,confnew" zabbix-agent
+```
+
+**`--check` na sistemu bez agenta.** Detekcija include putanje čita
+instaliranu konfiguraciju, koja u probnom prolazu na svežem serveru još ne
+postoji. Prvi prolaz mora biti pravi.
 
 ## Struktura
 
 ```text
 roles/zabbix_agent/
-├── README.md
-├── defaults/
-│   └── main.yml
-├── vars/
-│   └── main.yml
-├── handlers/
-│   └── main.yml
-├── tasks/
-│   └── main.yml
-└── templates/
-    └── zabbix_agent.conf.j2
+├── defaults/main.yml
+├── handlers/main.yml
+├── tasks/main.yml
+├── templates/dropin.conf.j2
+├── vars/main.yml
+└── README.md
 ```
 
-`vars/main.yml` sadrži izvedene vrednosti — putanje i ime servisa koji se razlikuju između `zabbix-agent` i `zabbix-agent2`. To nisu podešavanja i ne menjaju se kroz `group_vars`.
+## Idempotentnost
 
----
+Sve izmene idu kroz `apt`, `template`, `copy`, `file` i `service`. `slurp` i
+`find` su operacije čitanja. Drugi prolaz bez izmene varijabli ne prijavljuje
+nijednu promenu i ne pokreće handler.
 
 ## Provera
 
 ```bash
-# Bez izmena, sa prikazom razlike
-./apply.sh --limit deploy_zabbix_agent --check --diff
+# koji je include direktorijum otkriven
+grep -n '^Include' /etc/zabbix/zabbix_agentd.conf
 
-# Primena na jedan host
-./apply.sh --limit srv-web-01
+# šta je rola upisala
+cat /etc/zabbix/zabbix_agentd.d/zz-ansible.conf
 
-# Stanje servisa
-ansible srv-web-01 -m command -a "systemctl status zabbix-agent"
+# zaostali fajlovi
+ls -al /etc/zabbix/zabbix_agentd.d/
 
-# Da li agent odgovara lokalno
-ansible srv-web-01 -m command -a "zabbix_agentd -t agent.ping"
+# da li se konfiguracija parsira (ispisuje podržane stavke)
+zabbix_agentd -c /etc/zabbix/zabbix_agentd.conf -p | head
 
-# Log
-ansible srv-web-01 -m command -a "tail -20 /var/log/zabbix/zabbix_agentd.log"
+# stanje servisa i poslednje greške
+systemctl status zabbix-agent
+journalctl -u zabbix-agent -n 50 --no-pager
+
+# provera sa Zabbix servera
+zabbix_get -s 10.0.0.31 -k agent.ping
 ```
 
-Sa Zabbix servera, provera da agent odgovara spolja:
+## Rešavanje problema
 
-```bash
-zabbix_get -s srv-web-01 -k agent.ping
-```
+**Agent se ne pokreće posle prolaza role.** Skoro uvek sintaksna greška ili
+neučitljiv fajl u include direktorijumu. `journalctl -u zabbix-agent -n 50`
+navodi tačan fajl i liniju.
 
-Odgovor `1` znači da veza radi. `Connection refused` je skoro uvek zaštitni zid ili `ListenIP`.
+**Parametar iz drop-ina nema efekta.** Proveri da `Include` linija u glavnoj
+konfiguraciji zaista stoji *posle* tog parametra. U paketima jeste, ali ako je
+glavni fajl ručno menjan, redosled je mogao da se pomeri.
+
+**Rola prekida sa „nije pronađena nijedna aktivna Include direktiva".**
+Glavna konfiguracija je izmenjena ili paket nije standardan. Vrati fabrički
+fajl, ili dodaj `Include` liniju ručno i postavi
+`role_zabbix_agent_include_dir` na istu putanju.
+
+**Aktivne provere ne stižu, pasivne rade.** `ServerActive` nije postavljen ili
+se `Hostname` ne poklapa sa imenom hosta u Zabbix-u.
+
+**`zabbix_get` javlja da veza nije dozvoljena.** Adresa servera nije u
+`Server`, ili UFW pravilo za port 10050 nedostaje — vidi rolu `firewall`.
