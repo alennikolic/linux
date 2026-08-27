@@ -130,6 +130,12 @@
   roles:
     - zabbix_proxy
 
+- name: Selenium WebDriver za Zabbix browser stavke
+  hosts: deploy_zabbix_webdriver
+  become: true
+  roles:
+    - zabbix_webdriver
+
 # Ne instalira softver — upisuje hostove, sablone i akcije kroz
 # Zabbix API. Otuda apply_ prefiks.
 - name: Provision Zabbix configuration
