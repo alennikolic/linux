@@ -1,11 +1,10 @@
 ---
 # roles/timezone/handlers/main.yml
 #
-# Handler se poziva iz taskova koji menjaju NTP konfiguraciju.
-# Ime servisa se izvodi iz izbora u role_timezone_ntp_service
-# (vidi vars/main.yml).
+# Restart, ne reload — chrony nema reload koji bi ponovo procitao
+# spisak izvora.
 
-- name: "restart servisa za sinhronizaciju vremena"
+- name: "restart chrony"
   ansible.builtin.service:
-    name: "{{ _timezone_ntp.service }}"
+    name: "{{ _timezone_chrony_service }}"
     state: restarted
