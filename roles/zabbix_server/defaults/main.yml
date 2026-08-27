@@ -1,203 +1,149 @@
 ---
 # roles/zabbix_server/defaults/main.yml
-#
-# Rola "zabbix_server" instalira i konfigurise Zabbix server.
-#
-# Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_server],
-# koja kroz group_vars/deploy_zabbix_server.yml postavlja
-# role_zabbix_server_enabled.
-#
-# PREDUSLOVI:
-#   1. Zabbix repozitorijum — rola "repos", grupa [apply_repos]
-#   2. Baza sa UVEZENOM SEMOM — rola "zabbix_db"
-#
-# PODELA POSLA SA ROLOM zabbix_db:
-#   zabbix_db      — MySQL, baza, sema, nalozi
-#   zabbix_server  — instalira i konfigurise servis
-#
-# Ova rola bazu NE dira: ne kreira je, ne uvozi semu, ne menja
-# privilegije. Samo se na nju povezuje. Ako sema ne postoji, servis
-# se pokrene i odmah ugasi, sa porukom u svom logu.
 
+# ============================================================================
+# Rola: zabbix_server
+#
+# Instalira Zabbix server i upisuje SVOJU konfiguraciju kao drop-in fajl u
+# /etc/zabbix/zabbix_server.d/, umesto da prepisuje glavni konfiguracioni
+# fajl.
+#
+# Zasto drop-in:
+#   - /etc/zabbix/zabbix_server.conf je dpkg conffile od preko hiljadu linija.
+#     Rola koja ga prepisuje pravi konflikt pri svakoj nadogradnji paketa i
+#     mora se dopunjavati za svaki novi parametar koji Zabbix uvede.
+#   - Zabbix obradjuje Include direktivu u trenutku kad je procita. Kada je
+#     Include na kraju glavnog fajla, vrednosti iz drop-ina nadjacavaju
+#     podrazumevane.
+#
+# RAZLIKA U ODNOSU NA AGENTA: zabbix_server.conf u paketu NEMA aktivnu
+# Include liniju - sve su zakomentarisane, i to sa upstream putanjom
+# /usr/local/etc/. Rola je zato dodaje sama, kao jednu liniju na kraj fajla
+# (vidi role_zabbix_server_manage_include).
+#
+# Rola bazu NE dira. Ne kreira je, ne uvozi semu, ne menja privilegije - samo
+# upisuje podatke o vezi. Ceo posao nad bazom radi rola "zabbix_db".
+# ============================================================================
 
-# =====================================================================
-# AKTIVACIJA
-# =====================================================================
+# ---------------------------------------------------------------------------
+# Aktivacija i paket
+# ---------------------------------------------------------------------------
 
+# Prekidac role. Postavlja ga group_vars/deploy_zabbix_server.yml.
 role_zabbix_server_enabled: false
 
-
-# =====================================================================
-# BACKEND BAZE
-# =====================================================================
-# mysql — MySQL, MariaDB, Percona (podrazumevano)
-# pgsql — PostgreSQL
-#
-# Odredjuje iskljucivo ime paketa (zabbix-server-mysql naspram
-# zabbix-server-pgsql). Rola ga sama izvodi.
-#
-# PAZNJA: rola "zabbix_db" pokriva samo MySQL. Uz pgsql bazu, semu
-# i naloge moras pripremiti sam, pre pokretanja ove role.
-#
+# "mysql" ili "pgsql". Odredjuje samo ime paketa (zabbix-server-mysql /
+# zabbix-server-pgsql). Rola "zabbix_db" pokriva iskljucivo MySQL - uz pgsql
+# bazu, semu i naloge pripremas sam.
 role_zabbix_server_db_backend: mysql
 
-# Zakovana verzija paketa. Prazna vrednost instalira najnoviju.
-#
-#   role_zabbix_server_version: "1:7.0.19-1+ubuntu24.04"
-#
-# Ako zakujes ovu vrednost, zakuj i role_zabbix_db_sql_scripts_version
-# na hostu baze — sema i server moraju biti iste verzije.
-#
+# Zakovana verzija paketa. Prazno = najnovija iz repozitorijuma.
+#   role_zabbix_server_version: "1:7.0.9-1+ubuntu24.04"
+# Dostupne verzije: apt-cache madison zabbix-server-mysql
 role_zabbix_server_version: ""
 
-
-# =====================================================================
-# VEZA SA BAZOM
-# =====================================================================
-# Prazan DBHost znaci lokalni socket. Za bazu na drugom hostu upisi
-# adresu — IP ili ime hosta, NIKADA "localhost". MySQL klijent
-# "localhost" tumaci kao unix socket i ignorise DBPort.
+# ---------------------------------------------------------------------------
+# Veza sa bazom
 #
+# Ovi parametri su izdvojeni iz opsteg recnika namerno: bez njih server ne
+# startuje, pa nad njima postoji assert. Da su u recniku, korisnik koji u
+# group_vars definise role_zabbix_server_config potpuno bi zamenio
+# podrazumevani recnik (Ansible ne spaja recnike) i tiho ostao bez lozinke.
+# ---------------------------------------------------------------------------
+
+# IP adresa ili ime hosta baze. Prazna vrednost znaci lokalni unix socket.
+#
+# PAZNJA: "localhost" MySQL klijent tumaci kao unix socket i IGNORISE DBPort.
+# Za bazu na drugom hostu obavezno upisi IP adresu.
 role_zabbix_server_db_host: localhost
+
+# Upisuje se u konfiguraciju samo kada host nije localhost.
 role_zabbix_server_db_port: 3306
+
 role_zabbix_server_db_name: zabbix
 role_zabbix_server_db_user: zabbix
 
-# OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
-#
-# Mora biti ISTA kao role_zabbix_db_password na hostu baze. Ako se
-# vrednosti raziđu, server pri startu prijavi gresku 1045 i ugasi se.
-#
-#   host_vars/srv-mon-01.yml
-#     role_zabbix_server_db_password: "izaberi-dugacku-lozinku"
-#
-# host_vars zivi na kontrolnom cvoru, van git repozitorijuma, pa
-# lozinka nikada ne ulazi u istoriju verzija. Fajl treba da ima
-# dozvole 0600.
-#
+# OBAVEZNO. Mora biti ISTA vrednost kao role_zabbix_db_password na hostu
+# baze. Pripada host_vars ili vault-u, nikako ovom fajlu.
 role_zabbix_server_db_password: ""
 
-# Putanja do socket fajla. Koristi se samo kada je DBHost prazan
-# ili "localhost" na MySQL-u.
-#
+# Putanja do unix socket-a. Samo uz lokalnu bazu i samo ako podrazumevana
+# putanja ne odgovara.
 role_zabbix_server_db_socket: ""
 
+# ---------------------------------------------------------------------------
+# Ostali parametri konfiguracije
+# ---------------------------------------------------------------------------
 
-# =====================================================================
-# MREZA
-# =====================================================================
-
-role_zabbix_server_listen_port: 10051
-
-# Adresa na kojoj server slusa. Prazna vrednost znaci sve adrese.
-role_zabbix_server_listen_ip: ""
-
-# Adrese sa kojih se dozvoljava preuzimanje internih statistika
-# (zabbix[stats]). Lista razdvojena zarezom.
-role_zabbix_server_stats_allowed_ip: "127.0.0.1"
-
-
-# =====================================================================
-# LOGOVANJE
-# =====================================================================
-
-role_zabbix_server_logfile: /var/log/zabbix/zabbix_server.log
-role_zabbix_server_logfile_size: 10
-
-# 0=nista, 1=kriticno, 2=greske, 3=upozorenja (podrazumevano),
-# 4=debug, 5=prosireni debug
+# Slobodan recnik parametara koji se doslovno prepisuju u drop-in fajl.
+# Kljuc je ime Zabbix parametra (osetljivo na velika/mala slova), vrednost je
+# skalar ili lista. Lista se ispisuje kao vise linija sa istim kljucem - to
+# treba za parametre koji se legitimno ponavljaju.
 #
-# PAZNJA: nivoi 4 i 5 na produkcijskom serveru brzo pune disk.
-role_zabbix_server_debug_level: 3
-
-# Belezi upite sporije od zadatog broja milisekundi. Nula iskljucuje.
-role_zabbix_server_log_slow_queries: 3000
-
-
-# =====================================================================
-# PROCESI
-# =====================================================================
-# Podrazumevane vrednosti su Zabbix-ove i odgovaraju malom okruzenju
-# (do ~100 hostova). Za vece instalacije povecavaj postepeno i prati
-# iskoriscenost kroz "Zabbix server health" template.
+# Sve sto nije ovde nabrojano ostaje na vrednosti iz stock konfiguracije, pa
+# recnik drzi samo ono sto stvarno odstupa.
 #
-# PAZNJA: svaki proces trosi memoriju i konekciju ka bazi. Zbir
-# svih procesa ne sme preci max_connections na bazi
-# (role_zabbix_db_max_connections, podrazumevano 200).
-
-role_zabbix_server_start_pollers: 5
-role_zabbix_server_start_pollers_unreachable: 1
-role_zabbix_server_start_trappers: 5
-role_zabbix_server_start_pingers: 1
-role_zabbix_server_start_discoverers: 1
-role_zabbix_server_start_http_pollers: 1
-role_zabbix_server_start_preprocessors: 3
-role_zabbix_server_start_alerters: 3
-
-
-# =====================================================================
-# KESEVI
-# =====================================================================
-# Vrednosti su u bajtovima, sa sufiksima K, M, G.
+# Primer za okruzenje srednje velicine:
+#   role_zabbix_server_config:
+#     ListenPort: 10051
+#     CacheSize: 128M
+#     HistoryCacheSize: 64M
+#     ValueCacheSize: 64M
+#     StartPollers: 20
+#     StartPreprocessors: 10
+#     StartTrappers: 10
+#     Timeout: 10
+#     LogSlowQueries: 3000
+#     StatsAllowedIP: 127.0.0.1
 #
-# CacheSize        — konfiguracija hostova i stavki
-# HistoryCacheSize — podaci pre upisa u bazu
-# ValueCacheSize   — istorijske vrednosti za izracunavanje trigera
-# TrendCacheSize   — trendovi
-
-role_zabbix_server_cache_size: 32M
-role_zabbix_server_history_cache_size: 16M
-role_zabbix_server_history_index_cache_size: 4M
-role_zabbix_server_trend_cache_size: 4M
-role_zabbix_server_value_cache_size: 8M
-
-
-# =====================================================================
-# PUTANJE
-# =====================================================================
-
-role_zabbix_server_alert_scripts_path: /usr/lib/zabbix/alertscripts
-role_zabbix_server_external_scripts: /usr/lib/zabbix/externalscripts
-role_zabbix_server_fping_location: /usr/bin/fping
-
-# Vreme cekanja na odgovor od agenta ili proxy-ja, u sekundama.
-# Zabbix 7.0 dozvoljava do 30.
-role_zabbix_server_timeout: 4
-
-
-# =====================================================================
-# VISOKA DOSTUPNOST
-# =====================================================================
-# Prazna vrednost iskljucuje HA rezim.
+# Visoka dostupnost (svaki cvor dobija jedinstveno ime, svi dele istu bazu):
+#   role_zabbix_server_config:
+#     HANodeName: node-01
+#     NodeAddress: "10.0.0.50:10051"
 #
-# U HA klasteru svaki cvor dobija jedinstveno ime:
-#   host_vars/srv-mon-01.yml
-#     role_zabbix_server_ha_node_name: "node-01"
-#     role_zabbix_server_ha_node_address: "10.0.0.50:10051"
-#
-# Svi cvorovi koriste ISTU bazu.
-#
-role_zabbix_server_ha_node_name: ""
-role_zabbix_server_ha_node_address: ""
+# NAPOMENE:
+#   - ne koristi YAML true/false - Jinja ih ispisuje kao "True"/"False", sto
+#     Zabbix ne razume; koristi 0 i 1
+#   - svaki poller/trapper trosi jednu konekciju ka bazi; zbir svih procesa
+#     ne sme preci max_connections (role_zabbix_db_max_connections)
+#   - kljucevi DBHost, DBName, DBUser, DBPassword, DBSocket, DBPort i Include
+#     su rezervisani i assert prekida ako se nadju ovde
+role_zabbix_server_config: {}
 
-
-# =====================================================================
-# DODATNA KONFIGURACIJA
-# =====================================================================
-# Proizvoljne linije koje se dodaju na kraj konfiguracionog fajla.
-# Koristi za opcije koje rola ne pokriva (TLS ka proxy-jima, Vault,
-# SNMP trapper...).
+# Slobodan tekst koji se dodaje na kraj drop-in fajla, doslovno.
+# Izlaz u nuzdu za sve sto se ne uklapa u recnik.
 #
 #   role_zabbix_server_extra_config: |
 #     SNMPTrapperFile=/var/log/snmptrap/snmptrap.log
 #     StartSNMPTrapper=1
-#
 role_zabbix_server_extra_config: ""
 
+# ---------------------------------------------------------------------------
+# Drop-in mehanizam
+# ---------------------------------------------------------------------------
 
-# =====================================================================
-# SERVIS
-# =====================================================================
+# Direktorijum u koji ide drop-in. Za razliku od agenta, ovde se putanja NE
+# otkriva - paket je ne definise, pa je rola propisuje.
+role_zabbix_server_include_dir: /etc/zabbix/zabbix_server.d
+
+# Ime drop-in fajla. Prefiks "zz-" nema funkciju (Zabbix ne cita include
+# fajlove abecedno), ali jasno oznacava da je fajl pod tudjom upravom.
+role_zabbix_server_dropin_name: zz-ansible.conf
+
+# Kada je true, rola u glavnu konfiguraciju dodaje liniju
+#   Include=<role_zabbix_server_include_dir>/*.conf
+# na sam kraj fajla, u bloku sa Ansible markerima.
+#
+# To je JEDINA izmena glavnog fajla koju rola pravi. Bez nje drop-in nikada
+# ne bi bio ucitan, jer paket nema aktivnu Include direktivu.
+#
+# Postavi na false samo ako Include liniju odrzavas drugim putem. Rola tada
+# proverava da li je drop-in uopste dohvatljiv i prekida ako nije.
+role_zabbix_server_manage_include: true
+
+# ---------------------------------------------------------------------------
+# Servis
+# ---------------------------------------------------------------------------
 
 role_zabbix_server_service_enabled: true
 role_zabbix_server_service_state: started
