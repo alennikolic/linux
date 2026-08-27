@@ -3,11 +3,19 @@
 #
 #   1. Provere
 #   2. Instalacija paketa
-#   3. PHP podesavanja
+#   3. Otkrivanje okruzenja (PHP, putanja frontenda, Nginx)
 #   4. TLS materijal
-#   5. Vhost konfiguracija
-#   6. zabbix.conf.php — preskace carobnjak
-#   7. Servisi
+#   5. PHP-FPM pool
+#   6. Vhost konfiguracija
+#   7. Iskljucivanje vendorove konfiguracije
+#   8. Provera konfiguracije
+#   9. zabbix.conf.php — preskace carobnjak
+#  10. Servisi
+#
+# NACELO: nijedan fajl koji dpkg prati ne sme biti izmenjen. Rola
+# upisuje SOPSTVENE fajlove pod sopstvenim imenima, a vendorove samo
+# iskljucuje iz upotrebe uklanjanjem veza koje je napravila postinst
+# skripta paketa.
 
 - name: "Instalacija i konfiguracija Zabbix frontenda"
   block:
@@ -62,11 +70,33 @@
         - role_zabbix_web_https_enabled | bool
         - role_zabbix_web_hostname == '_'
 
+    # PHP odbija post_max_size manji od upload_max_filesize i pri tom
+    # ne prijavlja gresku — samo tise odbacuje velike zahteve.
+    - name: "Provera odnosa PHP velicina"
+      ansible.builtin.assert:
+        that:
+          - (role_zabbix_web_php_post_max_size | human_to_bytes)
+            >= (role_zabbix_web_php_upload_max_filesize | human_to_bytes)
+        fail_msg: >-
+          role_zabbix_web_php_post_max_size
+          ({{ role_zabbix_web_php_post_max_size }}) je manji od
+          role_zabbix_web_php_upload_max_filesize
+          ({{ role_zabbix_web_php_upload_max_filesize }}). Upload nikad
+          ne bi prosao, a PHP to ne prijavljuje kao gresku.
+        success_msg: "Odnos PHP velicina je ispravan."
+
     # -----------------------------------------------------------------
     # 2. Instalacija
     # -----------------------------------------------------------------
+    # zabbix-nginx-conf se instalira iako rola ne koristi njegove
+    # fajlove. Razlog je namerno konzervativan: paket ostaje jedini
+    # izvor "sveze" vendorove konfiguracije na disku, pa pri nadogradnji
+    # Zabbix-a mozes uporediti nasu konfiguraciju sa onom koju Zabbix
+    # trenutno preporucuje:
+    #
+    #   diff /etc/zabbix/nginx.conf /etc/nginx/conf.d/zabbix-ansible.conf
 
-    - name: "Instalacija frontenda i Nginx konfiguracije"
+    - name: "Instalacija frontenda i vendorove konfiguracije"
       block:
 
         - name: "Instalacija paketa {{ _zabbix_web_frontend_package }} i {{ _zabbix_web_conf_package }}"
@@ -96,27 +126,86 @@
               apt-cache policy {{ _zabbix_web_frontend_package }}
 
     # -----------------------------------------------------------------
-    # 3. PHP
+    # 3. Otkrivanje okruzenja
     # -----------------------------------------------------------------
-    # Verzija PHP-a se otkriva iz sistema, jer se razlikuje izmedju
-    # Ubuntu izdanja (8.1 na 22.04, 8.3 na 24.04). Zakovana putanja
-    # bi radila samo na jednom izdanju.
+    # Verzija PHP-a se cita iz rasporeda foldera u /etc/php, a NE
+    # kroz "php -r". Razlog: "php" je CLI SAPI, koji ne mora biti
+    # instaliran, a na hostu sa vise PHP verzija pokazuje na onu koju
+    # bira update-alternatives — sto ne mora biti ona cija FPM
+    # instanca servisira Zabbix.
 
-    - name: "Otkrivanje verzije PHP-a"
+    - name: "Otkrivanje PHP-FPM foldera"
+      ansible.builtin.find:
+        paths: /etc/php
+        patterns: fpm
+        file_type: directory
+        recurse: true
+        depth: 2
+      register: _php_fpm_dirs
+
+    - name: "Provera da je PHP-FPM instaliran"
+      ansible.builtin.assert:
+        that:
+          - _php_fpm_dirs.files | length > 0
+        fail_msg: >-
+          Ni u jednom podfolderu /etc/php nema "fpm" foldera, dakle
+          PHP-FPM nije instaliran. Paket
+          {{ _zabbix_web_frontend_package }} ga inace povlaci —
+          proveri da li je instalacija zaista prosla.
+        success_msg: "PHP-FPM je instaliran."
+
+    # Sa vise instaliranih verzija uzima se najveca. Poredjenje je
+    # tekstualno, sto bi pogresilo tek na "8.10" naspram "8.9" —
+    # kombinacija koja u Debian paketima ne postoji.
+    - name: "Izbor verzije PHP-a"
+      ansible.builtin.set_fact:
+        _zabbix_web_php_version: >-
+          {{ _php_fpm_dirs.files
+             | map(attribute='path') | map('dirname') | map('basename')
+             | sort | last }}
+
+    - name: "Otkrivena verzija PHP-a"
+      ansible.builtin.debug:
+        msg: "PHP-FPM verzija: {{ _zabbix_web_php_version }}"
+
+    # Od zvanicnih paketa 7.2 PHP fajlovi frontenda su premesteni iz
+    # /usr/share/zabbix u /usr/share/zabbix/ui. Zakovana putanja bi na
+    # 7.2+ dala stranicu sa uputstvom umesto ekrana za prijavu.
+    - name: "Provera nove putanje frontenda"
+      ansible.builtin.stat:
+        path: /usr/share/zabbix/ui
+      register: _zabbix_web_ui_dir
+
+    - name: "Izbor putanje frontenda"
+      ansible.builtin.set_fact:
+        _zabbix_web_docroot: >-
+          {{ '/usr/share/zabbix/ui'
+             if _zabbix_web_ui_dir.stat.isdir | default(false)
+             else '/usr/share/zabbix' }}
+
+    - name: "Otkrivena putanja frontenda"
+      ansible.builtin.debug:
+        msg: "Frontend se servira iz: {{ _zabbix_web_docroot }}"
+
+    # Sintaksa za HTTP/2 se menjala: do 1.25.0 ide kao parametar
+    # direktive listen, od 1.25.1 kao zasebna direktiva "http2 on".
+    # Stara sintaksa na novom Nginx-u ispisuje upozorenje, nova na
+    # starom prekida rad — zato se verzija otkriva.
+    #
+    # "nginx -v" pise na standardni izlaz za greske, otuda 2>&1.
+    - name: "Otkrivanje verzije Nginx-a"
       ansible.builtin.shell:
-        cmd: "php -r 'echo PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION;'"
-      register: _php_version
+        cmd: >-
+          set -o pipefail &&
+          nginx -v 2>&1 | sed -E 's#^nginx version: nginx/([0-9.]+).*#\1#'
+        executable: /bin/bash
+      register: _nginx_version
       changed_when: false
 
-    - name: "Podesavanja PHP-a za Zabbix"
-      ansible.builtin.template:
-        src: zabbix-php.ini.j2
-        dest: "/etc/php/{{ _php_version.stdout }}/fpm/conf.d/99-zabbix.ini"
-        owner: root
-        group: root
-        mode: '0644'
-        backup: true
-      notify: "Restartuj PHP-FPM"
+    - name: "Izbor sintakse za HTTP/2"
+      ansible.builtin.set_fact:
+        _zabbix_web_http2_new_syntax: >-
+          {{ _nginx_version.stdout is version('1.25.1', '>=') }}
 
     # -----------------------------------------------------------------
     # 4. TLS materijal
@@ -283,31 +372,36 @@
           when: not (role_zabbix_web_tls_selfsigned | bool)
 
     # -----------------------------------------------------------------
-    # 5. Vhost
+    # 5. PHP-FPM pool
     # -----------------------------------------------------------------
-    # Paket zabbix-nginx-conf isporucuje vhost sa zakomentarisanim
-    # listen i server_name — bez izmene ne radi. Rola upisuje
-    # sopstvenu verziju u celosti.
+    # Rola drzi sopstveni pool jer se PHP podesavanja drugacije NE
+    # MOGU postaviti. Direktive php_value[] iz pool-a imaju prednost
+    # nad php.ini i nad svime iz conf.d — vendorov pool zakiva
+    # max_execution_time, memory_limit, post_max_size,
+    # upload_max_filesize, max_input_time i max_input_vars, pa je
+    # svaka vrednost upisana u conf.d bila mrtvo slovo.
 
-    # Sintaksa za HTTP/2 se menjala: do 1.25.0 ide kao parametar
-    # direktive listen, od 1.25.1 kao zasebna direktiva "http2 on".
-    # Stara sintaksa na novom Nginx-u ispisuje upozorenje, nova na
-    # starom prekida rad — zato se verzija otkriva.
-    #
-    # "nginx -v" pise na standardni izlaz za greske, otuda 2>&1.
-    - name: "Otkrivanje verzije Nginx-a"
-      ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail &&
-          nginx -v 2>&1 | sed -E 's#^nginx version: nginx/([0-9.]+).*#\1#'
-        executable: /bin/bash
-      register: _nginx_version
-      changed_when: false
+    - name: "Sopstveni PHP-FPM pool"
+      ansible.builtin.template:
+        src: php-fpm.conf.j2
+        dest: "{{ _zabbix_web_pool_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      notify: "Restartuj PHP-FPM"
 
-    - name: "Izbor sintakse za HTTP/2"
-      ansible.builtin.set_fact:
-        _zabbix_web_http2_new_syntax: >-
-          {{ _nginx_version.stdout is version('1.25.1', '>=') }}
+    # Fajl iz ranije verzije role. Nikad nije imao efekta, ali ostavljen
+    # zavarava pri citanju konfiguracije.
+    - name: "Uklanjanje neupotrebljivog PHP ini fajla iz ranije verzije role"
+      ansible.builtin.file:
+        path: "{{ _zabbix_web_legacy_ini }}"
+        state: absent
+      notify: "Restartuj PHP-FPM"
+
+    # -----------------------------------------------------------------
+    # 6. Vhost
+    # -----------------------------------------------------------------
 
     - name: "Vhost konfiguracija"
       ansible.builtin.template:
@@ -319,18 +413,79 @@
         backup: true
       notify: "Restartuj web server"
 
-    # Provera cele Nginx konfiguracije pre restarta. Bez nje bi
-    # greska u vhost-u oborila web server koji do tada radi.
+    # -----------------------------------------------------------------
+    # 7. Iskljucivanje vendorove konfiguracije
+    # -----------------------------------------------------------------
+    # Tek POSLE upisa nasih fajlova, da izmedju dva stanja ne postoji
+    # trenutak bez ijedne vazece konfiguracije.
+    #
+    # Uklanjaju se ISKLJUCIVO simbolicne veze koje je napravila
+    # postinst skripta. Fajlovi na koje pokazuju — /etc/zabbix/nginx.conf
+    # i /etc/zabbix/php-fpm.conf — ostaju netaknuti.
+    #
+    # Nadogradnja paketa moze ponovo napraviti ove veze. Rola ih pri
+    # sledecem pokretanju ponovo uklanja; do tada frontend radi, samo
+    # uz suvisan vendorov pool i moguc sukob oko podrazumevanog
+    # server bloka na portu 80.
+
+    - name: "Iskljucivanje vendorovog vhost-a"
+      ansible.builtin.file:
+        path: "{{ _zabbix_web_vendor_vhost_link }}"
+        state: absent
+      notify: "Restartuj web server"
+
+    - name: "Iskljucivanje vendorovog PHP-FPM pool-a"
+      ansible.builtin.file:
+        path: "{{ _zabbix_web_vendor_pool_link }}"
+        state: absent
+      notify: "Restartuj PHP-FPM"
+
+    # Ranija verzija role je prepisivala /etc/zabbix/nginx.conf. Na
+    # hostovima koji su kroz nju prosli taj conffile i dalje nosi njen
+    # sadrzaj. Sada je van upotrebe, pa ne smeta, ali vredi znati.
+    - name: "Provera da li je vendorov vhost ranije izmenjen"
+      ansible.builtin.command:
+        cmd: "dpkg --verify {{ _zabbix_web_conf_package }}"
+      register: _dpkg_verify
+      changed_when: false
+      failed_when: false
+
+    - name: "Napomena o izmenjenom vendorovom fajlu"
+      ansible.builtin.debug:
+        msg: >-
+          Vendorov conffile je izmenjen — gotovo sigurno ga je
+          prepisala ranija verzija ove role. Sada je van upotrebe i ne
+          utice ni na sta. Ako zelis cist original:
+          apt-get install --reinstall -o Dpkg::Options::="--force-confask"
+          {{ _zabbix_web_conf_package }}
+      when: _dpkg_verify.stdout | length > 0
+
+    # -----------------------------------------------------------------
+    # 8. Provera konfiguracije
+    # -----------------------------------------------------------------
+    # Obe provere idu pre restarta. Bez njih bi greska u nasem fajlu
+    # oborila servis koji do tada radi.
+    #
+    # Provera se ne moze uraditi kroz "validate" parametar modula
+    # template, jer i Nginx i PHP-FPM proveravaju CELU konfiguraciju —
+    # pojedinacan fajl van svog konteksta nije vazeca celina.
+
     - name: "Provera Nginx konfiguracije"
       ansible.builtin.command:
         cmd: nginx -t
       changed_when: false
 
+    - name: "Provera PHP-FPM konfiguracije"
+      ansible.builtin.command:
+        cmd: "{{ _zabbix_web_php_fpm_binary }} -t"
+      changed_when: false
+
     # -----------------------------------------------------------------
-    # 6. Konfiguracija frontenda
+    # 9. Konfiguracija frontenda
     # -----------------------------------------------------------------
-    # Upis ovog fajla preskace carobnjak za instalaciju koji se inace
-    # pojavljuje pri prvom otvaranju frontenda.
+    # Ovaj fajl NIJE conffile — ne isporucuje ga nijedan paket, nego ga
+    # inace pravi carobnjak pri prvom otvaranju frontenda. Time sto ga
+    # rola upisuje, carobnjak se preskace.
 
     - name: "Folder za konfiguraciju frontenda"
       ansible.builtin.file:
@@ -352,12 +507,12 @@
       notify: "Restartuj PHP-FPM"
 
     # -----------------------------------------------------------------
-    # 7. Servisi
+    # 10. Servisi
     # -----------------------------------------------------------------
 
-    - name: "Servis PHP-FPM"
+    - name: "Servis {{ _zabbix_web_php_service }}"
       ansible.builtin.service:
-        name: "php{{ _php_version.stdout }}-fpm"
+        name: "{{ _zabbix_web_php_service }}"
         enabled: true
         state: started
 
