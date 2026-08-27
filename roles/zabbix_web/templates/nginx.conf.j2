@@ -1,7 +1,11 @@
-{{ '#' }} /etc/zabbix/nginx.conf
+{{ '#' }} /etc/nginx/conf.d/zabbix-ansible.conf
 {{ '#' }}
 {{ '#' }} UPRAVLJA ANSIBLE ROLA: zabbix_web
 {{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
+{{ '#' }}
+{{ '#' }} Ovaj fajl zamenjuje vendorov vhost iz /etc/zabbix/nginx.conf,
+{{ '#' }} koji rola iskljucuje uklanjanjem veze iz conf.d — sam vendorov
+{{ '#' }} fajl ostaje netaknut i sluzi za poredjenje pri nadogradnji.
 {% if role_zabbix_web_https_enabled | bool and role_zabbix_web_http_redirect | bool %}
 
 {{ '#' }} =====================================================================
@@ -67,9 +71,16 @@ server {
 {% endif %}
 {% endif %}
 
-        root /usr/share/zabbix;
+{{ '#' }}       Putanja se otkriva u toku role. Od zvanicnih paketa 7.2
+{{ '#' }}       frontend je premesten u podfolder "ui".
+        root {{ _zabbix_web_docroot }};
 
         index index.php;
+
+{{ '#' }}       Nginx podrazumevano prima najvise 1M po zahtevu, sto je
+{{ '#' }}       manje od post_max_size u PHP-u. Uvoz veceg template
+{{ '#' }}       fajla bi vratio 413 pre nego sto PHP uopste vidi zahtev.
+        client_max_body_size {{ role_zabbix_web_client_max_body_size }};
 
         location = /favicon.ico {
                 log_not_found off;
@@ -98,9 +109,9 @@ server {
                 fastcgi_split_path_info ^(.+\.php)(/.+)$;
                 fastcgi_index   index.php;
 
-                fastcgi_param   DOCUMENT_ROOT   /usr/share/zabbix;
-                fastcgi_param   SCRIPT_FILENAME /usr/share/zabbix$fastcgi_script_name;
-                fastcgi_param   PATH_TRANSLATED /usr/share/zabbix$fastcgi_script_name;
+                fastcgi_param   DOCUMENT_ROOT   {{ _zabbix_web_docroot }};
+                fastcgi_param   SCRIPT_FILENAME {{ _zabbix_web_docroot }}$fastcgi_script_name;
+                fastcgi_param   PATH_TRANSLATED {{ _zabbix_web_docroot }}$fastcgi_script_name;
 
                 include fastcgi_params;
                 fastcgi_param   QUERY_STRING    $query_string;
