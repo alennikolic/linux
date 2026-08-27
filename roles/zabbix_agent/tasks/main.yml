@@ -39,6 +39,45 @@
           ijednog od njih agent nema sa kim da komunicira.
         quiet: true
 
+    # Tacka-zarez u Server parametru nije razdvajac - cela niska bi bila
+    # protumacena kao jedna adresa i agent bi odbijao konekcije servera.
+    # Provera se radi nad IZRACUNATOM vrednoscu, pa jednako hvata i
+    # ugnjezdenu listu i doslovan string.
+    - name: Provera - nema tacke-zareza u Server parametru
+      ansible.builtin.assert:
+        that:
+          - "';' not in _zabbix_agent_server_value"
+        fail_msg: >-
+          role_zabbix_agent_server je dao vrednost
+          "{{ _zabbix_agent_server_value }}", a Zabbix u parametru Server
+          prihvata iskljucivo zarez kao razdvajac. Navedi sve adrese kao
+          ravnu listu ili razdvojene zarezom. Ako ovo ipak radis namerno,
+          postavi role_zabbix_agent_server_allow_semicolon na true.
+        quiet: true
+      when: not (role_zabbix_agent_server_allow_semicolon | bool)
+
+    - name: Provera - Server nema prazan element u spisku adresa
+      ansible.builtin.assert:
+        that:
+          - _zabbix_agent_server_value is not search(_zabbix_agent_address_flaw_re)
+        fail_msg: >-
+          role_zabbix_agent_server je dao vrednost
+          "{{ _zabbix_agent_server_value }}" sa praznim elementom
+          (razdvajac na pocetku ili kraju, ili dva zaredom).
+        quiet: true
+      when: _zabbix_agent_server_value | length > 0
+
+    - name: Provera - ServerActive nema prazan element u spisku adresa
+      ansible.builtin.assert:
+        that:
+          - _zabbix_agent_server_active_value is not search(_zabbix_agent_address_flaw_re)
+        fail_msg: >-
+          role_zabbix_agent_server_active je dao vrednost
+          "{{ _zabbix_agent_server_active_value }}" sa praznim elementom
+          (razdvajac na pocetku ili kraju, ili dva zaredom).
+        quiet: true
+      when: _zabbix_agent_server_active_value | length > 0
+
     - name: Provera - definisan Hostname
       ansible.builtin.assert:
         that:
