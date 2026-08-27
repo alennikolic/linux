@@ -1,0 +1,63 @@
+; /etc/php/{{ _zabbix_web_php_version }}/fpm/pool.d/zabbix-ansible.conf
+;
+; UPRAVLJA ANSIBLE ROLA: zabbix_web
+; Rucne izmene bice prepisane pri sledecem pokretanju.
+;
+; Ovaj pool zamenjuje vendorov pool iz /etc/zabbix/php-fpm.conf, koji
+; rola iskljucuje uklanjanjem veze u pool.d — sam vendorov fajl ostaje
+; netaknut i moze posluziti za poredjenje.
+;
+; Ime pool-a se namerno razlikuje od vendorovog ("zabbix"): dva pool-a
+; sa istim imenom sprecavaju pokretanje celog php-fpm servisa, a ne
+; samo tog pool-a.
+
+[{{ _zabbix_web_pool_name }}]
+
+user = www-data
+group = www-data
+
+; Socket cita Nginx, koji takodje radi kao www-data. Mrezni port se
+; ne otvara — nema razloga da ovaj pool bude dostupan van hosta.
+listen = {{ _zabbix_web_php_socket }}
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+pm = {{ role_zabbix_web_php_pm }}
+pm.max_children = {{ role_zabbix_web_php_pm_max_children }}
+{% if role_zabbix_web_php_pm == 'dynamic' %}
+pm.start_servers = {{ role_zabbix_web_php_pm_start_servers }}
+pm.min_spare_servers = {{ role_zabbix_web_php_pm_min_spare_servers }}
+pm.max_spare_servers = {{ role_zabbix_web_php_pm_max_spare_servers }}
+{% endif %}
+{% if role_zabbix_web_php_pm == 'ondemand' %}
+pm.process_idle_timeout = {{ role_zabbix_web_php_pm_idle_timeout }}
+{% endif %}
+
+; --- PHP vrednosti ---------------------------------------------------
+; Ovo je JEDINO mesto na kome ove vrednosti stvarno rade. Direktive
+; php_value[] iz pool-a imaju prednost nad php.ini i nad svime iz
+; conf.d, pa isti parametri upisani drugde nemaju efekta.
+;
+; Vrednosti ispod su minimalne koje Zabbix frontend zahteva; nize
+; vrednosti frontend odbija uz poruku na ekranu.
+
+php_value[max_execution_time] = {{ role_zabbix_web_php_max_execution_time }}
+php_value[memory_limit] = {{ role_zabbix_web_php_memory_limit }}
+php_value[post_max_size] = {{ role_zabbix_web_php_post_max_size }}
+php_value[upload_max_filesize] = {{ role_zabbix_web_php_upload_max_filesize }}
+php_value[max_input_time] = {{ role_zabbix_web_php_max_input_time }}
+php_value[max_input_vars] = {{ role_zabbix_web_php_max_input_vars }}
+php_value[date.timezone] = {{ role_zabbix_web_php_timezone }}
+{% if role_zabbix_web_php_extra_values | length > 0 %}
+
+; --- Dodatne PHP vrednosti -------------------------------------------
+{% for key, value in role_zabbix_web_php_extra_values.items() %}
+php_value[{{ key }}] = {{ value }}
+{% endfor %}
+{% endif %}
+
+; session.save_path se namerno NE zadaje. Bez njega vazi podrazumevana
+; putanja iz php.ini (/var/lib/php/sessions), koju Debian redovno cisti
+; kroz sopstveni posao. Sopstvena putanja bi zahtevala i sopstveno
+; ciscenje, inace se folder vremenom napuni.
