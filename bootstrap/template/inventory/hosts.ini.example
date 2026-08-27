@@ -124,6 +124,12 @@
 
 [deploy_zabbix_proxy]
 
+# Selenium WebDriver u Dockeru, za browser stavke.
+# Ide na host sa zabbix_server ili zabbix_proxy rolom.
+# Preduslov: Docker, kroz grupe apply_repos i deploy_packages.
+[deploy_zabbix_webdriver]
+
+
 [apply_zabbix_provisioning]
 # Hostovi, sabloni i akcije kroz Zabbix API.
 # Ne instalira softver — otuda apply_ prefiks.
