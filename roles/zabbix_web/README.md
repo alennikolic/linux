@@ -8,6 +8,40 @@ Apache više nije podržan.
 
 ---
 
+## Šta rola dira, a šta ne
+
+Ovo je najvažnija stvar za razumevanje role.
+
+Zabbix paket `zabbix-nginx-conf` isporučuje dva konfiguraciona fajla i, kroz `postinst` skriptu, dve simbolične veze koje ih aktiviraju. **Rola ne menja nijedan od ta dva fajla.** Umesto toga uklanja veze i upisuje sopstvene fajlove pod sopstvenim imenima.
+
+| Putanja | Ko je vlasnik | Šta rola radi |
+|---|---|---|
+| `/etc/zabbix/nginx.conf` | dpkg conffile | **ne dira** |
+| `/etc/zabbix/php-fpm.conf` | dpkg conffile | **ne dira** |
+| `/etc/nginx/conf.d/zabbix.conf` | veza, pravi je `postinst` | uklanja |
+| `/etc/php/<v>/fpm/pool.d/zabbix.conf` | veza, pravi je `postinst` | uklanja |
+| `/etc/nginx/conf.d/zabbix-ansible.conf` | **rola** | upisuje vhost |
+| `/etc/php/<v>/fpm/pool.d/zabbix-ansible.conf` | **rola** | upisuje FPM pool |
+| `/etc/zabbix/web/zabbix.conf.php` | **rola** | upisuje, preskače čarobnjak |
+| `/etc/php/<v>/fpm/conf.d/99-zabbix.ini` | ranija verzija role | uklanja |
+
+Posledice:
+
+- `apt upgrade` **nikada** ne postavlja pitanje o izmenjenom conffile-u.
+- Vendorova konfiguracija ostaje na disku netaknuta i služi kao referenca pri nadogradnji Zabbix-a.
+- Ime pool-a je `zabbix-ansible`, ne `zabbix`. Namerno — dva pool-a sa istim imenom sprečavaju pokretanje **celog** `php-fpm` servisa, ne samo tog pool-a. Različito ime čini uklanjanje veze bezopasnim i ako zakaže.
+
+Nadogradnja paketa može ponovo napraviti vendorove veze. Rola ih pri sledećem pokretanju ponovo uklanja; do tada frontend radi, samo uz suvišan pool i moguć sukob oko podrazumevanog server bloka na portu 80.
+
+Poređenje sa onim što Zabbix trenutno preporučuje:
+
+```bash
+diff /etc/zabbix/nginx.conf /etc/nginx/conf.d/zabbix-ansible.conf
+diff /etc/zabbix/php-fpm.conf /etc/php/8.3/fpm/pool.d/zabbix-ansible.conf
+```
+
+---
+
 ## Preduslovi
 
 | Preduslov | Ko ga rešava |
@@ -62,7 +96,7 @@ role_zabbix_web_hostname: "zabbix.example.com"
 
 Sertifikat i ključ rola traži na `role_zabbix_web_tls_cert` i `role_zabbix_web_tls_key`.
 
-**Rola ne prima sadržaj sertifikata ni ključa kroz varijable** — svesna odluka. Privatni ključ ne prolazi kroz Ansible varijable. Materijal se donosi na host van ove role, a rola ga samo koristi. Ostaju dva načina.
+**Rola ne prima sadržaj sertifikata ni ključa kroz varijable** — svesna odluka. Privatni ključ ne prolazi kroz Ansible: ne stoji u `host_vars`, ne prolazi kroz templating, ne pojavljuje se u izlazu. Materijal se donosi na host nezavisno od role. Ostaju dva načina.
 
 ### 1. Fajlovi već postoje na hostu
 
@@ -103,6 +137,30 @@ Rola ih neće prepisati, jer nove pravi isključivo kada **oba** fajla nedostaju
 
 ---
 
+## PHP podešavanja
+
+Sve `role_zabbix_web_php_*` vrednosti rola upisuje kao `php_value[]` u sopstveni FPM pool. **To je jedino mesto na kome one stvarno važe** — direktive `php_value[]` iz pool-a imaju prednost nad `php.ini` i nad svime iz `conf.d`.
+
+Ranija verzija role pisala ih je u `conf.d/99-zabbix.ini`, gde ih je vendorov pool tiho pregazio; jedina vrednost koja je radila bila je `date.timezone`, jer je vendor nju ostavljao zakomentarisanu. Rola sada taj fajl uklanja.
+
+```yaml
+role_zabbix_web_php_memory_limit: "256M"
+role_zabbix_web_php_pm_max_children: 50
+role_zabbix_web_php_extra_values:
+  opcache.memory_consumption: 256
+```
+
+Provera šta je zaista na snazi:
+
+```bash
+sudo ss -lx | grep zabbix-ansible
+sudo grep -r php_value /etc/php/*/fpm/pool.d/
+```
+
+Broj procesa puta `memory_limit` je gornja granica potrošnje memorije. Sa podrazumevanih `50 × 128M` to je teorijskih 6.4 GB — u praksi mnogo manje, ali vredi znati pre nego što podigneš oba.
+
+---
+
 ## Varijable
 
 ### Aktivacija
@@ -136,8 +194,9 @@ Rola ih neće prepisati, jer nove pravi isključivo kada **oba** fajla nedostaju
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
 | `role_zabbix_web_listen_port` | `8080` | HTTP port. |
-| `role_zabbix_web_hostname` | `_` | `server_name`. Uz HTTPS mora biti stvarno ime. |
+| `role_zabbix_web_hostname` | `_` | `server_name`. Više imena razdvoji razmakom. |
 | `role_zabbix_web_listen_address` | `""` | Prazno = sve adrese. |
+| `role_zabbix_web_client_max_body_size` | `16M` | Najveći zahtev. Drži ≥ `post_max_size`. |
 
 ### HTTPS
 
@@ -166,16 +225,29 @@ Rola ih neće prepisati, jer nove pravi isključivo kada **oba** fajla nedostaju
 | `role_zabbix_web_tls_selfsigned_key_size` | `2048` | Dužina RSA ključa. |
 | `role_zabbix_web_tls_dependency_packages` | `[python3-cryptography]` | Zavisnosti za rad sa sertifikatima. |
 
-### PHP
+### PHP vrednosti
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
 | `role_zabbix_web_php_max_execution_time` | `300` | Sekunde. Minimum koji Zabbix traži. |
 | `role_zabbix_web_php_memory_limit` | `128M` | Minimum. |
 | `role_zabbix_web_php_post_max_size` | `16M` | Minimum. |
-| `role_zabbix_web_php_upload_max_filesize` | `2M` | Minimum. |
+| `role_zabbix_web_php_upload_max_filesize` | `2M` | Minimum. Mora biti ≤ `post_max_size`. |
 | `role_zabbix_web_php_max_input_time` | `300` | Sekunde. |
+| `role_zabbix_web_php_max_input_vars` | `10000` | Zabbix zahteva ovoliko. |
 | `role_zabbix_web_php_timezone` | `Europe/Belgrade` | Utiče na prikaz vremena. |
+| `role_zabbix_web_php_extra_values` | `{}` | Dodatne `php_value[]` direktive. |
+
+### PHP-FPM pool
+
+| Varijabla | Podrazumevano | Opis |
+|---|---|---|
+| `role_zabbix_web_php_pm` | `dynamic` | `dynamic`, `ondemand`, `static`. |
+| `role_zabbix_web_php_pm_max_children` | `50` | Gornja granica broja procesa. |
+| `role_zabbix_web_php_pm_start_servers` | `5` | Samo uz `dynamic`. |
+| `role_zabbix_web_php_pm_min_spare_servers` | `5` | Samo uz `dynamic`. |
+| `role_zabbix_web_php_pm_max_spare_servers` | `35` | Samo uz `dynamic`. |
+| `role_zabbix_web_php_pm_idle_timeout` | `10s` | Samo uz `ondemand`. |
 
 ### Ostalo
 
@@ -223,16 +295,27 @@ role_zabbix_web_tls_key: /root/ca/private/zabbix-frontend.key
 
 U `playbook.yml` `deploy_root_ca` mora ići pre `deploy_zabbix_web`.
 
-### Frontend na IP adresi
+### Frontend na IP adresi i po imenu
 
 ```yaml
-role_zabbix_web_hostname: "10.0.0.60"
+role_zabbix_web_hostname: "10.0.0.60 zabbix.example.com"
 role_zabbix_web_https_enabled: true
+role_zabbix_web_tls_selfsigned_cn: "zabbix.example.com"
 role_zabbix_web_tls_selfsigned_sans:
-  - "DNS:srv-web-01"
+  - "IP:10.0.0.60"
 ```
 
-CN je IP adresa, pa rola sama upisuje `IP:10.0.0.60` u SAN.
+`server_name` prima oba imena. CN je ime, IP ide u SAN ručno.
+
+### Frontend na hostu sa malo memorije
+
+```yaml
+role_zabbix_web_php_pm: ondemand
+role_zabbix_web_php_pm_max_children: 10
+role_zabbix_web_php_pm_idle_timeout: "30s"
+```
+
+Prvi zahtev posle mirovanja je sporiji, ali u praznom hodu nema nijednog PHP procesa.
 
 ### Rola ne sme improvizovati
 
@@ -256,7 +339,13 @@ role_zabbix_web_nginx_extra_config: |
 
 **Čarobnjak se preskače.** Kada `zabbix.conf.php` postoji i sadrži ispravne podatke, frontend odmah prikazuje ekran za prijavu. Podrazumevani nalog je `Admin` sa lozinkom `zabbix` — **promeni je odmah po prvoj prijavi.**
 
-**Rola ne unosi TLS materijal kroz varijable.** Privatni ključ ne prolazi kroz Ansible — ne završava u `host_vars`, ne prolazi kroz templating, ne pojavljuje se u izlazu. Sertifikat i ključ se donose na host nezavisno od ove role, ili ih rola napravi sama kao privremene.
+**Nijedan dpkg conffile nije izmenjen.** Rola uklanja samo simbolične veze, koje pravi `postinst` skripta i koje dpkg ne prati. Vendorovi fajlovi ostaju netaknuti.
+
+**Putanja frontenda se otkriva.** Od zvaničnih paketa 7.2 PHP fajlovi su premešteni iz `/usr/share/zabbix` u `/usr/share/zabbix/ui`. Rola proverava postojanje `ui` podfoldera umesto da putanju zakuje. Sa zakovanom putanjom na 7.2+ frontend prikazuje stranicu sa uputstvom umesto ekrana za prijavu.
+
+**Verzija PHP-a se čita iz `/etc/php`, ne iz `php -r`.** CLI SAPI ne mora biti instaliran, a na hostu sa više PHP verzija pokazuje na onu koju bira `update-alternatives` — što ne mora biti verzija čija FPM instanca servisira Zabbix.
+
+**Rola ne prima TLS materijal kroz varijable.** Privatni ključ ne prolazi kroz Ansible. Sertifikat i ključ se donose na host nezavisno, ili ih rola napravi sama kao privremene.
 
 **Self-signed se pravi samo kada oba fajla nedostaju.** Čim jedan postoji, rola ne pravi ništa — inače bi ručno donet sertifikat bio prepisan pri sledećem pokretanju. Ako postoji tačno jedan fajl, rola prekida rad, jer je to gotovo uvek trag prekinutog ranijeg pokušaja.
 
@@ -264,17 +353,39 @@ role_zabbix_web_nginx_extra_config: |
 
 **HSTS i self-signed se ne trpe.** Greška sertifikata uz aktivan HSTS se u većini pretraživača **ne može preskočiti**. Ostavi HSTS isključen dok ne dobiješ sertifikat kojem klijenti veruju.
 
-**Verzija PHP-a se otkriva iz sistema.** Ubuntu 22.04 isporučuje PHP 8.1, 24.04 isporučuje 8.3. Rola pokreće `php -r` umesto da verziju zakuje.
-
 **Sintaksa za HTTP/2 se menjala.** Do Nginx 1.25.0 ide kao parametar direktive `listen`, od 1.25.1 kao zasebna direktiva `http2 on`. Rola otkriva verziju i bira ispravnu — Ubuntu 24.04 isporučuje 1.24.0, dakle staru.
 
 **`fastcgi_param HTTPS on`** se dodaje samo uz TLS. Bez toga PHP ne zna da je veza šifrovana, pa Zabbix ne postavlja `secure` zastavicu na kolačić sesije.
 
-**Konfiguracija se proverava pre restarta.** Rola pokreće `nginx -t` posle upisa vhost-a. Greška prekida rolu pre nego što obori web server koji do tada radi.
+**`client_max_body_size` je usklađen sa PHP-om.** Nginx podrazumevano prima 1M po zahtevu, što je manje od `post_max_size`. Uvoz većeg template fajla bi vratio `413` pre nego što PHP uopšte vidi zahtev.
+
+**Obe konfiguracije se proveravaju pre restarta.** Rola pokreće `nginx -t` i `php-fpm<v> -t` posle upisa. Greška prekida rolu pre nego što obori servis koji do tada radi. Provera ne može ići kroz `validate` parametar modula `template`, jer oba alata proveravaju **celu** konfiguraciju — pojedinačan fajl van svog konteksta nije važeća celina.
+
+**`session.save_path` se namerno ne zadaje.** Bez njega važi podrazumevana putanja iz `php.ini`, koju Debian redovno čisti kroz sopstveni posao. Sopstvena putanja bi zahtevala i sopstveno čišćenje, inače se folder vremenom napuni, a simptom — nasumično odjavljivanje — ne upućuje na uzrok.
 
 **Privatni ključ ima dozvole `0600` i vlasnika `root`.** Nginx master proces radi kao root i čita ga pre nego što spusti privilegije radnih procesa. Taskovi koji ga dodiruju imaju `no_log: true`.
 
 **Idempotentnost.** Rola je idempotentna. Ponovljeno pokretanje prijavljuje `ok` i ne restartuje servise. Self-signed sertifikat se ne pravi ponovo — ni pri isteku. Obnova je ručna: obriši oba fajla i pusti rolu.
+
+---
+
+## Migracija sa ranije verzije role
+
+Prvi prolaz na hostu koji je već prošao kroz stariju verziju uradi sve sam. Vredi znati šta se dešava:
+
+1. Upisuje se novi vhost i novi pool.
+2. Uklanjaju se vendorove veze i `99-zabbix.ini`.
+3. Socket se menja iz `/run/php/zabbix.sock` u `/run/php/zabbix-ansible.sock`.
+4. Rola proverava `dpkg --verify` i ispisuje napomenu ako je stariji `/etc/zabbix/nginx.conf` izmenjen.
+
+Fajl `/etc/zabbix/nginx.conf` na takvom hostu i dalje nosi sadržaj koji je upisala stara verzija role. Sada je van upotrebe i ne utiče ni na šta. Ako želiš čist original:
+
+```bash
+sudo apt-get install --reinstall \
+  -o Dpkg::Options::="--force-confask" zabbix-nginx-conf
+```
+
+Backup fajlovi koje je stara verzija ostavila (`*.NNNN.YYYY-MM-DD@HH:MM:SS~`) mogu se obrisati kad potvrdiš da frontend radi.
 
 ---
 
@@ -290,7 +401,7 @@ roles/zabbix_web/
 └── templates/
     ├── zabbix.conf.php.j2
     ├── nginx.conf.j2
-    └── zabbix-php.ini.j2
+    └── php-fpm.conf.j2
 ```
 
 ---
@@ -304,12 +415,18 @@ roles/zabbix_web/
 ansible srv-web-01 -m command -a "systemctl status nginx"
 ansible srv-web-01 -m shell -a "systemctl status php*-fpm"
 
-# Da li konfiguracija prolazi
+# Da li obe konfiguracije prolaze
 ansible srv-web-01 -m command -a "nginx -t" --become
+ansible srv-web-01 -m shell -a "/usr/sbin/php-fpm*  -t" --become
 
 # Šta Nginx sluša
 ansible srv-web-01 -m command -a "ss -lntp sport = :443"
+
+# Da li je vendorova konfiguracija zaista isključena
+ansible srv-web-01 -m shell -a "ls -l /etc/nginx/conf.d/ /etc/php/*/fpm/pool.d/"
 ```
+
+Očekuje se `zabbix-ansible.conf` na oba mesta, i **nijedan** `zabbix.conf`.
 
 Sertifikat na hostu:
 
@@ -338,6 +455,28 @@ curl -kIs https://zabbix.example.com/ | head -3
 ---
 
 ## Rešavanje problema
+
+### `php-fpm` neće da startuje, poruka o duplom pool-u
+
+Vendorova veza nije uklonjena, a naš pool nosi isto ime. Ne bi trebalo da se desi jer se imena razlikuju, ali ako si ručno menjao `_zabbix_web_pool_name`:
+
+```bash
+ls -l /etc/php/*/fpm/pool.d/
+sudo rm -f /etc/php/8.3/fpm/pool.d/zabbix.conf
+sudo systemctl restart php8.3-fpm
+```
+
+### `502 Bad Gateway`
+
+PHP-FPM nije pokrenut, ili socket ne postoji na očekivanoj putanji:
+
+```bash
+ansible srv-web-01 -m command -a "ls -l /run/php/zabbix-ansible.sock"
+```
+
+Ako fajla nema, pool nije učitan. Proveri da postoji `pool.d/zabbix-ansible.conf` i da `php-fpm<v> -t` prolazi.
+
+Ako socket postoji ali greška ostaje, u pitanju su dozvole — očekuje se `www-data:www-data` i `0660`.
 
 ### `Postoji samo jedan od dva TLS fajla`
 
@@ -385,6 +524,14 @@ cat host.crt ca.crt > fullchain.pem
 
 `role_zabbix_web_hostname` se razlikuje od SAN vrednosti u sertifikatu. Uz automatski self-signed to znači da je `hostname` promenjen posle pravljenja sertifikata — obriši oba fajla i pusti rolu ponovo.
 
+### Otvaram po imenu, dobijam tuđi sajt ili podrazumevanu stranicu
+
+`server_name` sadrži samo IP adresu, pa se zahtev po imenu ne poklapa sa ovim server blokom. Navedi oba, razdvojena razmakom:
+
+```yaml
+role_zabbix_web_hostname: "10.0.0.60 zabbix.example.com"
+```
+
 ### Beskonačno preusmeravanje
 
 Reverse proxy ispred već završava TLS i prosleđuje HTTP, a ovaj vhost opet preusmerava:
@@ -398,6 +545,20 @@ role_zabbix_web_https_enabled: false
 
 `zabbix.conf.php` ne postoji ili PHP ne može da ga pročita. Očekuje se `root:www-data` sa `0640`.
 
+### Stranica sa uputstvom o `/usr/share/zabbix/ui`
+
+Vhost pokazuje na staru putanju. Rola je otkriva sama, pa ovo znači da je vhost upisan pre nadogradnje na 7.2+. Pokreni rolu ponovo.
+
+### PHP vrednost koju sam zadao ne važi
+
+Proveri da nije ostao vendorov pool:
+
+```bash
+ls -l /etc/php/*/fpm/pool.d/
+```
+
+Ako je `zabbix.conf` tu, njegov `php_value[]` se primenjuje na njegov pool. Naš vhost gađa naš socket, pa to ne bi trebalo da utiče — ali ako je vhost ručno menjan, proveri na koji socket pokazuje `fastcgi_pass`.
+
 ### `Database error: Connection to database failed`
 
 Proveri da lozinka i ime naloga odgovaraju roli `zabbix_db`, i da `role_zabbix_db_frontend_hosts` pokriva IP ovog hosta.
@@ -405,14 +566,6 @@ Proveri da lozinka i ime naloga odgovaraju roli `zabbix_db`, i da `role_zabbix_d
 ### `Zabbix server is not running`
 
 Frontend radi, ali ne može do servera na portu 10051. Proveri `role_zabbix_web_server_host` i pravilo zaštitnog zida. Ne sprečava pregled podataka — samo radnje koje traže server.
-
-### `502 Bad Gateway`
-
-PHP-FPM nije pokrenut ili socket ne postoji:
-
-```bash
-ansible srv-web-01 -m command -a "ls -l /run/php/zabbix.sock"
-```
 
 ### Odjavljuje me pri svakom osvežavanju stranice
 
