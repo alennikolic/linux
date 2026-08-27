@@ -1,0 +1,51 @@
+{{ '#' }} ===========================================================================
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: zabbix_agent
+{{ '#' }}
+{{ '#' }} Rucne izmene bice prebrisane pri sledecem prolazu role.
+{{ '#' }}
+{{ '#' }} Ovaj fajl se ucitava kroz Include direktivu iz
+{{ '#' }} {{ _zabbix_agent_main_conf }}.
+{{ '#' }} Posto Zabbix obradjuje Include tamo gde ga procita, a direktiva
+{{ '#' }} stoji na kraju glavnog fajla, vrednosti odavde nadjacavaju iste
+{{ '#' }} parametre iz podrazumevane konfiguracije.
+{{ '#' }} ===========================================================================
+
+{% if _zabbix_agent_server_value | length > 0 %}
+{{ '#' }} Adrese sa kojih su dozvoljene pasivne provere.
+Server={{ _zabbix_agent_server_value }}
+{% endif %}
+{% if _zabbix_agent_server_active_value | length > 0 %}
+{{ '#' }} Adrese kojima agent salje podatke aktivnih provera.
+ServerActive={{ _zabbix_agent_server_active_value }}
+{% endif %}
+
+{{ '#' }} Mora se poklapati sa imenom hosta u Zabbix-u.
+Hostname={{ role_zabbix_agent_hostname }}
+{% if _zabbix_agent_tls_enabled | bool %}
+
+{{ '#' }} --- TLS (PSK) --------------------------------------------------------
+{{ '#' }} Sama tajna je u {{ role_zabbix_agent_tls_psk_file }} (mode 0600),
+{{ '#' }} da bi ovaj fajl mogao ostati citljiv.
+TLSConnect=psk
+TLSAccept=psk
+TLSPSKIdentity={{ role_zabbix_agent_tls_psk_identity }}
+TLSPSKFile={{ role_zabbix_agent_tls_psk_file }}
+{% endif %}
+{% if role_zabbix_agent_config | length > 0 %}
+
+{{ '#' }} --- Parametri iz role_zabbix_agent_config ----------------------------
+{% for key, value in role_zabbix_agent_config | dictsort %}
+{% if value is sequence and value is not string %}
+{% for item in value %}
+{{ key }}={{ item }}
+{% endfor %}
+{% else %}
+{{ key }}={{ value }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if role_zabbix_agent_extra_config | length > 0 %}
+
+{{ '#' }} --- role_zabbix_agent_extra_config -----------------------------------
+{{ role_zabbix_agent_extra_config }}
+{% endif %}
