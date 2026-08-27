@@ -1,0 +1,15 @@
+---
+# roles/zabbix_webdriver/handlers/main.yml
+
+- name: Ponovno ucitavanje systemd konfiguracije
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Restart, a ne reload: kontejner se pokrece komandom, pa se izmenjeni
+# argumenti mogu primeniti samo ponovnim pokretanjem.
+- name: Restart zabbix webdriver
+  ansible.builtin.systemd:
+    name: "{{ _zabbix_webdriver_service }}"
+    state: restarted
+    daemon_reload: true
+  when: role_zabbix_webdriver_service_state == 'started'
