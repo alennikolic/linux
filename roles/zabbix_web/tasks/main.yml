@@ -50,22 +50,6 @@
         success_msg: "Portovi se razlikuju."
       when: role_zabbix_web_https_enabled | bool
 
-    # Sadrzaj sertifikata bez kljuca (ili obrnuto) daje polovicno
-    # stanje: jedan fajl bi bio prepisan, drugi bi ostao stari i ne
-    # bi mu odgovarao.
-    - name: "Provera da su sertifikat i kljuc zadati zajedno"
-      ansible.builtin.assert:
-        that:
-          - (role_zabbix_web_tls_cert_content | length > 0)
-            == (role_zabbix_web_tls_key_content | length > 0)
-        fail_msg: >-
-          Zadat je sadrzaj samo jednog od dva TLS fajla. Popuni i
-          role_zabbix_web_tls_cert_content i
-          role_zabbix_web_tls_key_content, ili ostavi oba prazna pa
-          koristi fajlove sa hosta.
-        success_msg: "TLS sadrzaj je zadat konzistentno."
-      when: role_zabbix_web_https_enabled | bool
-
     # Ime hosta iz sertifikata mora odgovarati imenu kroz koje se
     # frontend otvara. Sa "_" pretrazivac uvek prijavljuje neslaganje.
     - name: "Upozorenje kada je HTTPS ukljucen bez imena hosta"
@@ -137,14 +121,16 @@
     # -----------------------------------------------------------------
     # 4. TLS materijal
     # -----------------------------------------------------------------
-    # Redosled je bitan i cini razliku izmedju role koja pomaze i role
-    # koja prepisuje tudji rad:
+    # Rola NE unosi sertifikat i kljuc kroz varijable. TLS materijal
+    # se donosi na host van Ansible-a (rucno, kroz ACME klijenta,
+    # kroz rolu root_ca...), a ova rola ga samo koristi.
     #
-    #   a) sadrzaj zadat u varijablama  -> upisuje se, uvek
-    #   b) fajlovi vec postoje          -> koriste se, ne diraju se
-    #   c) fajlova nema                 -> pravi se self-signed
+    # Ostaju dva slucaja:
     #
-    # Slucaj (c) se prepoznaje po tome da NIJEDAN od dva fajla ne
+    #   a) fajlovi vec postoje  -> koriste se, ne diraju se
+    #   b) fajlova nema         -> pravi se privremen self-signed par
+    #
+    # Slucaj (b) se prepoznaje po tome da NIJEDAN od dva fajla ne
     # postoji. Cim jedan postoji, rola ne pravi nista — inace bi
     # rucno donet sertifikat bio prepisan pri sledecem pokretanju.
 
@@ -163,33 +149,6 @@
             - "{{ role_zabbix_web_tls_key | dirname }}"
           loop_control:
             label: "{{ item }}"
-
-        # --- (a) sadrzaj zadat u varijablama --------------------------
-
-        - name: "Upis TLS sertifikata iz varijable"
-          ansible.builtin.copy:
-            content: "{{ role_zabbix_web_tls_cert_content }}"
-            dest: "{{ role_zabbix_web_tls_cert }}"
-            owner: root
-            group: root
-            mode: '0644'
-            backup: true
-          when: role_zabbix_web_tls_cert_content | length > 0
-          notify: "Restartuj web server"
-
-        # Privatni kljuc cita Nginx master proces, koji radi kao root.
-        # Sire dozvole nisu potrebne ni pozeljne.
-        - name: "Upis TLS privatnog kljuca iz varijable"
-          ansible.builtin.copy:
-            content: "{{ role_zabbix_web_tls_key_content }}"
-            dest: "{{ role_zabbix_web_tls_key }}"
-            owner: root
-            group: root
-            mode: '0600'
-            backup: true
-          no_log: true
-          when: role_zabbix_web_tls_key_content | length > 0
-          notify: "Restartuj web server"
 
         # --- Stanje na disku -----------------------------------------
 
@@ -226,7 +185,7 @@
               privremen self-signed par.
             success_msg: "Stanje TLS fajlova je konzistentno."
 
-        # --- (c) automatski self-signed ------------------------------
+        # --- (b) automatski self-signed ------------------------------
 
         - name: "Pravljenje privremenog self-signed sertifikata"
           when:
@@ -305,7 +264,7 @@
                   {{ role_zabbix_web_tls_key }} — rola ih nece
                   prepisati, jer nove pravi samo kada oba nedostaju.
 
-        # --- (b) fajlovi moraju odnekud doci -------------------------
+        # --- (a) fajlovi moraju odnekud doci -------------------------
 
         - name: "Potvrda da TLS materijal postoji"
           ansible.builtin.assert:
@@ -317,9 +276,9 @@
               pravljenje je iskljuceno (role_zabbix_web_tls_selfsigned
               je false). Ocekivano:
               {{ role_zabbix_web_tls_cert }} i {{ role_zabbix_web_tls_key }}.
-              Donesi fajlove na host, zadaj njihov sadrzaj kroz
-              role_zabbix_web_tls_cert_content i _key_content, ili
-              ukljuci role_zabbix_web_tls_selfsigned.
+              Donesi fajlove na host, ili ukljuci
+              role_zabbix_web_tls_selfsigned pa ce rola napraviti
+              privremen self-signed par.
             success_msg: "TLS materijal je na mestu."
           when: not (role_zabbix_web_tls_selfsigned | bool)
 
