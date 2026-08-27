@@ -1,8 +1,13 @@
-# Rola: zabbix_server
+<!-- roles/zabbix_server/README.md -->
+
+# Rola: `zabbix_server`
 
 Instalira i konfiguriše Zabbix server na Debian/Ubuntu sistemima.
+Konfiguracija se upisuje kao **drop-in fajl** u `/etc/zabbix/zabbix_server.d/`;
+glavni `zabbix_server.conf` ostaje fabrički.
 
-Rola **bazu ne dira** — ne kreira je, ne uvozi šemu, ne menja privilegije. Samo se na nju povezuje.
+Rola **bazu ne dira** — ne kreira je, ne uvozi šemu, ne menja privilegije.
+Samo se na nju povezuje.
 
 ---
 
@@ -14,7 +19,38 @@ zabbix_server  →  instalira i konfiguriše servis
 zabbix_web     →  frontend
 ```
 
-Uvoz šeme je posao role `zabbix_db`, jer zahteva root pristup bazi kroz lokalni unix socket. Nalog `zabbix` nema privilegije potrebne za `CREATE FUNCTION` na MySQL-u sa uključenim binarnim logom.
+Uvoz šeme je posao role `zabbix_db`, jer zahteva root pristup bazi kroz
+lokalni unix socket. Nalog `zabbix` nema privilegije potrebne za
+`CREATE FUNCTION` na MySQL-u sa uključenim binarnim logom.
+
+---
+
+## Zašto drop-in
+
+`zabbix_server.conf` ima preko hiljadu linija i dpkg ga tretira kao
+*conffile*. Rola koja ga prepisuje u celosti:
+
+- pravi konflikt pri svakoj nadogradnji paketa, sa razlikom od stotina linija;
+- mora se dopunjavati za svaki parametar koji Zabbix uvede u novom izdanju
+  (`StartBrowserPollers` u 7.0, `StartHANodes`…), inače ti parametri nikada
+  ne stignu na sistem.
+
+Drop-in rešava oboje. Cena je jedna linija u glavnom fajlu.
+
+### Include linija
+
+Za razliku od agenta, paket servera **nema aktivnu `Include` direktivu** — sve
+su zakomentarisane, i to sa upstream putanjom `/usr/local/etc/`. Rola zato na
+sam kraj fajla dodaje blok:
+
+```text
+# BEGIN UPRAVLJA ANSIBLE ROLA: zabbix_server
+Include=/etc/zabbix/zabbix_server.d/*.conf
+# END UPRAVLJA ANSIBLE ROLA: zabbix_server
+```
+
+Pozicija na kraju nije kozmetička: Zabbix obrađuje `Include` u trenutku kada
+ga pročita, pa samo tako drop-in nadjačava vrednosti iz glavnog fajla.
 
 ---
 
@@ -26,9 +62,12 @@ Uvoz šeme je posao role `zabbix_db`, jer zahteva root pristup bazi kroz lokalni
 | Baza sa uvezenom šemom | rola `zabbix_db`, grupa `[deploy_zabbix_db]` |
 | Port 10051 otvoren | rola `firewall`, grupa `[apply_firewall]` |
 
-U `playbook.yml` redosled je `apply_repos` → `deploy_zabbix_db` → `deploy_zabbix_server`.
+U `playbook.yml` redosled je `apply_repos` → `deploy_zabbix_db` →
+`deploy_zabbix_server`.
 
-> Rola `zabbix_db` pokriva samo **MySQL**. Uz `role_zabbix_server_db_backend: pgsql` bazu, šemu i naloge moraš pripremiti sam.
+> Rola `zabbix_db` pokriva samo **MySQL**. Uz
+> `role_zabbix_server_db_backend: pgsql` bazu, šemu i naloge moraš pripremiti
+> sam.
 
 ---
 
@@ -40,20 +79,25 @@ U `playbook.yml` redosled je `apply_repos` → `deploy_zabbix_db` → `deploy_za
 srv-mon-01
 ```
 
-Grupi pripada `group_vars/deploy_zabbix_server.yml`, koji postavlja `role_zabbix_server_enabled: true`.
+```yaml
+# group_vars/deploy_zabbix_server.yml
+role_zabbix_server_enabled: true
+```
 
 ---
 
 ## Obavezna konfiguracija
 
-Lozinka baze je jedina obavezna vrednost i mora biti **ista** kao `role_zabbix_db_password` na hostu baze:
+Lozinka baze je jedina obavezna vrednost i mora biti **ista** kao
+`role_zabbix_db_password` na hostu baze:
 
 ```yaml
 # host_vars/srv-mon-01.yml
 role_zabbix_server_db_password: "izaberi-dugacku-lozinku"
 ```
 
-`host_vars` živi u `/opt/ansible/production/`, van git repozitorijuma. Postavi dozvole `0600`.
+`host_vars` živi u `/opt/ansible/production/`, van git repozitorijuma.
+Postavi dozvole `0600`.
 
 ---
 
@@ -63,158 +107,136 @@ role_zabbix_server_db_password: "izaberi-dugacku-lozinku"
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_server_enabled` | `false` | Kada je `false`, rola ne dira ništa. |
-| `role_zabbix_server_db_backend` | `mysql` | `mysql` ili `pgsql`. Određuje samo ime paketa. |
-| `role_zabbix_server_version` | `""` | Zakovana verzija. Prazno = najnovija. |
+| `role_zabbix_server_enabled` | `false` | Prekidač role |
+| `role_zabbix_server_db_backend` | `mysql` | `mysql` ili `pgsql`; određuje ime paketa |
+| `role_zabbix_server_version` | `""` | Zakovana verzija; prazno = najnovija |
 
 ### Veza sa bazom
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_server_db_host` | `localhost` | IP ili ime hosta. Prazno = lokalni socket. |
-| `role_zabbix_server_db_port` | `3306` | Piše se u konfiguraciju samo kada host nije `localhost`. |
-| `role_zabbix_server_db_name` | `zabbix` | Ime baze. |
-| `role_zabbix_server_db_user` | `zabbix` | Nalog. Isti kao `role_zabbix_db_server_user`. |
-| `role_zabbix_server_db_password` | `""` | **Obavezno.** Isti kao `role_zabbix_db_password`. |
-| `role_zabbix_server_db_socket` | `""` | Samo uz lokalnu bazu. |
+| `role_zabbix_server_db_host` | `localhost` | IP ili ime hosta; prazno = lokalni socket |
+| `role_zabbix_server_db_port` | `3306` | Piše se samo kada host nije `localhost` |
+| `role_zabbix_server_db_name` | `zabbix` | Ime baze |
+| `role_zabbix_server_db_user` | `zabbix` | Nalog |
+| `role_zabbix_server_db_password` | `""` | **Obavezno** |
+| `role_zabbix_server_db_socket` | `""` | Samo uz lokalnu bazu |
 
-### Mreža i logovanje
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_server_listen_port` | `10051` | Port na kojem server sluša. |
-| `role_zabbix_server_listen_ip` | `""` | Prazno = sve adrese. |
-| `role_zabbix_server_stats_allowed_ip` | `127.0.0.1` | Adrese koje smeju čitati `zabbix[stats]`. |
-| `role_zabbix_server_logfile` | `/var/log/zabbix/zabbix_server.log` | Putanja loga. |
-| `role_zabbix_server_logfile_size` | `10` | MB pre rotacije. |
-| `role_zabbix_server_debug_level` | `3` | 0–5. Nivoi 4 i 5 brzo pune disk. |
-| `role_zabbix_server_log_slow_queries` | `3000` | Milisekunde. Nula isključuje. |
-
-### Procesi
+### Konfiguracija
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_server_start_pollers` | `5` | Pasivne provere. |
-| `role_zabbix_server_start_pollers_unreachable` | `1` | Nedostupni hostovi. |
-| `role_zabbix_server_start_trappers` | `5` | Prima podatke od agenata i proksija. |
-| `role_zabbix_server_start_pingers` | `1` | ICMP provere. |
-| `role_zabbix_server_start_discoverers` | `1` | Mrežno otkrivanje. |
-| `role_zabbix_server_start_http_pollers` | `1` | Web scenariji. |
-| `role_zabbix_server_start_preprocessors` | `3` | Obrada vrednosti pre upisa. |
-| `role_zabbix_server_start_alerters` | `3` | Slanje obaveštenja. |
+| `role_zabbix_server_config` | `{}` | Slobodan rečnik svih ostalih parametara |
+| `role_zabbix_server_extra_config` | `""` | Doslovan tekst na kraju fajla |
 
-### Keševi
+### Drop-in mehanizam
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_server_cache_size` | `32M` | Konfiguracija hostova i stavki. |
-| `role_zabbix_server_history_cache_size` | `16M` | Podaci pre upisa u bazu. |
-| `role_zabbix_server_history_index_cache_size` | `4M` | Indeks istorije. |
-| `role_zabbix_server_trend_cache_size` | `4M` | Trendovi. |
-| `role_zabbix_server_value_cache_size` | `8M` | Istorijske vrednosti za trigere. |
+| `role_zabbix_server_include_dir` | `/etc/zabbix/zabbix_server.d` | Direktorijum drop-ina |
+| `role_zabbix_server_dropin_name` | `zz-ansible.conf` | Ime drop-in fajla |
+| `role_zabbix_server_manage_include` | `true` | Rola sama dodaje `Include` liniju |
 
-### Putanje i ostalo
+### Servis
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_server_alert_scripts_path` | `/usr/lib/zabbix/alertscripts` | Skripte za obaveštenja. |
-| `role_zabbix_server_external_scripts` | `/usr/lib/zabbix/externalscripts` | Eksterne provere. |
-| `role_zabbix_server_fping_location` | `/usr/bin/fping` | Putanja do `fping`. |
-| `role_zabbix_server_timeout` | `4` | Sekunde. Do 30. |
-| `role_zabbix_server_ha_node_name` | `""` | Ime čvora u HA klasteru. |
-| `role_zabbix_server_ha_node_address` | `""` | Adresa čvora. |
-| `role_zabbix_server_extra_config` | `""` | Proizvoljne linije. |
-| `role_zabbix_server_service_enabled` | `true` | Startuje uz sistem. |
-| `role_zabbix_server_service_state` | `started` | `started`, `stopped`. |
+| `role_zabbix_server_service_enabled` | `true` | Servis omogućen pri podizanju |
+| `role_zabbix_server_service_state` | `started` | Ciljno stanje servisa |
+
+Ključevi `DBHost`, `DBName`, `DBUser`, `DBPassword`, `DBSocket`, `DBPort` i
+`Include` su rezervisani i ne smeju se pojaviti u `role_zabbix_server_config`
+— `assert` prekida izvršavanje.
 
 ---
 
 ## Primeri
 
-### Server i baza na istom hostu
+Malo okruženje, baza lokalno — ništa osim lozinke:
 
 ```yaml
 # host_vars/srv-mon-01.yml
-role_zabbix_db_password: "izaberi-dugacku-lozinku"
-role_zabbix_server_db_host: localhost
-role_zabbix_server_db_password: "izaberi-dugacku-lozinku"
+role_zabbix_server_db_password: "{{ _zabbix_db_pass }}"
 ```
 
-Host ide u obe grupe, `[deploy_zabbix_db]` i `[deploy_zabbix_server]`.
+Baza na drugom hostu:
 
-### Baza na zasebnom hostu
+```yaml
+role_zabbix_server_db_host: "10.0.0.60"
+role_zabbix_server_db_password: "{{ _zabbix_db_pass }}"
+```
+
+Okruženje srednje veličine (do ~1000 hostova):
+
+```yaml
+role_zabbix_server_config:
+  CacheSize: 128M
+  HistoryCacheSize: 64M
+  HistoryIndexCacheSize: 32M
+  TrendCacheSize: 32M
+  ValueCacheSize: 128M
+  StartPollers: 20
+  StartPollersUnreachable: 5
+  StartTrappers: 10
+  StartPreprocessors: 10
+  StartPingers: 5
+  Timeout: 10
+  LogSlowQueries: 3000
+```
+
+Visoka dostupnost — svaki čvor dobija jedinstveno ime, svi dele istu bazu:
 
 ```yaml
 # host_vars/srv-mon-01.yml
-role_zabbix_server_db_host: "10.0.0.21"
-role_zabbix_server_db_port: 3306
-role_zabbix_server_db_socket: ""
-role_zabbix_server_db_password: "izaberi-dugacku-lozinku"
+role_zabbix_server_config:
+  HANodeName: node-01
+  NodeAddress: "10.0.0.50:10051"
 ```
+
+Statistika dostupna frontendu i proxy-jima:
 
 ```yaml
-# host_vars/srv-db-01.yml
-role_zabbix_db_password: "izaberi-dugacku-lozinku"
-role_zabbix_db_bind_address: "0.0.0.0"
-role_zabbix_db_server_hosts:
-  - "10.0.0.50"
-
-role_firewall_rules:
-  - { rule: allow, port: 3306, proto: tcp, from: "10.0.0.50", comment: "Zabbix server -> baza" }
+role_zabbix_server_config:
+  StatsAllowedIP: "127.0.0.1,10.0.0.0/8"
 ```
-
-> `role_zabbix_server_db_host` mora biti IP ili ime hosta, **nikada `localhost`** — MySQL klijent `localhost` tumači kao unix socket i ignoriše `DBPort`.
-
-### Veće okruženje
-
-```yaml
-role_zabbix_server_start_pollers: 30
-role_zabbix_server_start_preprocessors: 10
-role_zabbix_server_start_trappers: 10
-role_zabbix_server_cache_size: 256M
-role_zabbix_server_history_cache_size: 128M
-role_zabbix_server_value_cache_size: 128M
-```
-
-> Svaki proces troši memoriju i **jednu konekciju ka bazi**. Zbir svih `Start*` vrednosti mora stati u `role_zabbix_db_max_connections` na hostu baze.
-
-### SNMP trapovi
-
-```yaml
-role_zabbix_server_extra_config: |
-  SNMPTrapperFile=/var/log/snmptrap/snmptrap.log
-  StartSNMPTrapper=1
-```
-
-### HA klaster
-
-```yaml
-# host_vars/srv-mon-01.yml
-role_zabbix_server_ha_node_name: "node-01"
-role_zabbix_server_ha_node_address: "10.0.0.50:10051"
-```
-
-```yaml
-# host_vars/srv-mon-02.yml
-role_zabbix_server_ha_node_name: "node-02"
-role_zabbix_server_ha_node_address: "10.0.0.51:10051"
-```
-
-Oba čvora koriste **istu bazu**, koju priprema jedan prolaz role `zabbix_db`.
 
 ---
 
-## Napomene
+## Zamke
 
-**Verzija paketa mora odgovarati verziji šeme.** Ako zakuješ `role_zabbix_server_version`, zakuj i `role_zabbix_db_sql_scripts_version` na hostu baze. Neusklađenost se vidi tek kada server pri startu odbije da radi sa bazom pogrešne verzije.
+**Nadogradnja paketa može ukloniti `Include` liniju.** Ako pri `apt upgrade`
+odabereš „install the package maintainer's version", blok sa `Include`
+nestaje i cela konfiguracija prestaje da važi. Kod servera to nije tiho —
+bez `DBPassword` servis ne startuje. Rola vraća liniju pri sledećem prolazu.
+Preporuka: na upit odgovori `N` (zadrži postojeću verziju), pa pusti rolu.
 
-**Konfiguracioni fajl sadrži lozinku**, pa ima dozvole `0640` i grupu `zabbix`. Task koji ga upisuje ima `no_log: true`, što znači da `--diff` neće prikazati razliku — to je cena zaštite lozinke.
+**Broj procesa naspram `max_connections`.** Svaki poller, trapper i
+preprocessor drži konekciju ka bazi. Zbir ne sme preći
+`role_zabbix_db_max_connections` (podrazumevano 200), inače server pada uz
+`Too many connections`.
 
-**Rola ne otvara port.** Agenti i proksiji se javljaju na 10051; to pravilo pripada roli `firewall`.
+**`localhost` ignoriše `DBPort`.** MySQL klijent to ime tumači kao unix
+socket. Za bazu na drugom hostu obavezno upiši IP adresu.
 
-**Prvi start može potrajati.** Posle uvoza šeme Zabbix server pri prvom pokretanju radi dodatne provere baze. Ako `systemctl status` pokaže da servis radi a frontend prijavljuje da server nije dostupan, sačekaj minut pa proveri log.
+**Boolean vrednosti.** `true`/`false` iz YAML-a Jinja ispisuje kao
+`True`/`False`, što Zabbix ne razume. Koristi `0` i `1`.
 
-**Idempotentnost.** Rola je idempotentna. Ponovljeno pokretanje prijavljuje `ok` i ne restartuje servis, osim kada se paket ili konfiguracija zaista promene.
+**Sintaksna greška ruši servis.** Neispravan ili nečitljiv include fajl
+sprečava pokretanje. Handler radi `restart`, ne `reload`, da bi to bilo odmah
+vidljivo.
+
+**Prelazak sa stare verzije role.** Serveri koji su već dobili potpuno
+prepisan `zabbix_server.conf` neće biti vraćeni na fabrički automatski. Stare
+vrednosti bi ostale u glavnom fajlu kao drugi izvor istine:
+
+```bash
+apt-get install --reinstall -o Dpkg::Options::="--force-confask,confnew" \
+  zabbix-server-mysql
+```
+
+**Rola ne pravi rezervnu kopiju drop-ina.** Fajl sadrži lozinku u čitljivom
+obliku; kopija u istom direktorijumu bila bi drugi primerak tajne. Izvor
+istine su varijable u `host_vars`.
 
 ---
 
@@ -222,102 +244,67 @@ Oba čvora koriste **istu bazu**, koju priprema jedan prolaz role `zabbix_db`.
 
 ```text
 roles/zabbix_server/
-├── README.md
 ├── defaults/main.yml
-├── vars/main.yml
 ├── handlers/main.yml
 ├── tasks/main.yml
-└── templates/zabbix_server.conf.j2
+├── templates/dropin.conf.j2
+├── vars/main.yml
+└── README.md
 ```
+
+---
+
+## Idempotentnost
+
+Sve izmene idu kroz `apt`, `file`, `blockinfile`, `template` i `service`.
+`grep` provera ima `changed_when: false`. Drugi prolaz bez izmene varijabli
+ne prijavljuje nijednu promenu i ne pokreće handler.
 
 ---
 
 ## Provera
 
 ```bash
-./apply.sh --limit srv-mon-01
+# Include linija na kraju glavnog fajla
+tail -5 /etc/zabbix/zabbix_server.conf
 
-# Stanje servisa
-ansible srv-mon-01 -m command -a "systemctl status zabbix-server"
+# šta je rola upisala (sadrži lozinku)
+sudo cat /etc/zabbix/zabbix_server.d/zz-ansible.conf
 
-# Log — traži "Zabbix Server started"
-ansible srv-mon-01 -m command -a "tail -30 /var/log/zabbix/zabbix_server.log"
+# stanje servisa i poslednje greške
+systemctl status zabbix-server
+journalctl -u zabbix-server -n 50 --no-pager
+tail -50 /var/log/zabbix/zabbix_server.log
 
-# Da li server sluša
-ansible srv-mon-01 -m command -a "ss -lntp sport = :10051"
-```
+# da li sluša
+ss -ltnp | grep 10051
 
-Na hostu baze:
-
-```bash
-# Da li je šema uvezena i koja je verzija
-ansible srv-db-01 -m shell -a "mysql -e 'SELECT * FROM zabbix.dbversion;'" --become
-
-# Da li baza sluša na mreži
-ansible srv-db-01 -m command -a "ss -tln sport = :3306"
-```
-
-Sa hosta servera, provera da baza uopšte odgovara:
-
-```bash
-mysql -h 10.0.0.21 -u zabbix -p zabbix -e "SELECT 1;"
+# verzija i veza sa bazom u logu
+grep -E 'Starting Zabbix Server|database' /var/log/zabbix/zabbix_server.log | tail
 ```
 
 ---
 
 ## Rešavanje problema
 
-### Servis se pokrene pa odmah ugasi
+**Servis se ne pokreće posle prolaza role.** Pogledaj
+`/var/log/zabbix/zabbix_server.log` — poruka navodi tačan parametar ili fajl.
+Najčešće je greška u vrednosti iz `role_zabbix_server_config`.
 
-Log je merodavan:
+**`cannot use database ... its "users" table is empty`.** Šema nije uvezena.
+Host mora biti u grupi `[deploy_zabbix_db]`, a `deploy_zabbix_db` ide pre
+`deploy_zabbix_server` u `playbook.yml`.
 
-```bash
-journalctl -u zabbix-server -n 50
-tail -50 /var/log/zabbix/zabbix_server.log
-```
+**`Access denied for user 'zabbix'`.** `role_zabbix_server_db_password` se ne
+poklapa sa `role_zabbix_db_password` na hostu baze.
 
-Skoro uvek greška u konfiguraciji ili nedostupna baza.
-
-### `Cannot connect to database` ili `database is not created`
-
-Šema nije uvezena. To je posao role `zabbix_db` — pusti je na hostu baze:
-
-```bash
-./apply.sh --limit srv-db-01
-```
-
-Provera:
+**Parametar iz drop-ina nema efekta.** Proveri da `Include` linija stoji na
+kraju glavnog fajla, posle tog parametra:
 
 ```bash
-sudo mysql -e "SELECT * FROM zabbix.dbversion;"
+grep -n '^Include' /etc/zabbix/zabbix_server.conf
+wc -l /etc/zabbix/zabbix_server.conf
 ```
 
-### `ERROR 1045: Access denied for user 'zabbix'`
-
-Tri moguća uzroka.
-
-Lozinke se razilaze između `role_zabbix_db_password` i `role_zabbix_server_db_password`.
-
-Nalog ne sme sa te adrese. Na hostu baze:
-
-```bash
-sudo mysql -e "SELECT user, host FROM mysql.user WHERE user='zabbix';"
-```
-
-Kolona `host` mora pokrivati IP sa koje server dolazi — proveri je sa `ip -4 addr show` na hostu servera i uskladi `role_zabbix_db_server_hosts`.
-
-Nalog uopšte ne postoji, jer je rola `zabbix_db` pukla pre koraka u kojem se pravi.
-
-### `ERROR 2003 ... (111)`
-
-*Connection refused* — niko ne sluša na toj adresi. Da UFW blokira, veza bi visila do isteka vremena, ne pukla odmah. Skoro uvek znači da baza sluša samo na `127.0.0.1`. Na hostu baze:
-
-```bash
-sudo mysqld --verbose --help 2>/dev/null | grep -m1 '^bind-address'
-```
-
-Greška `2005` umesto `2003` znači da se ime hosta ne razrešava — problem je u DNS-u ili `/etc/hosts`.
-
-### Verzija baze ne odgovara verziji servera
-
-U logu servera piše da je potrebna nadogradnja baze, ili da je verzija previsoka. Uskladi `role_zabbix_server_version` i `role_zabbix_db_sql_scripts_version`.
+**`Too many connections`.** Zbir procesa iz `role_zabbix_server_config`
+prelazi `max_connections` na bazi.
