@@ -26,18 +26,50 @@ _zabbix_agent_reserved_keys:
   - TLSPSKIdentity
   - TLSPSKFile
 
-# Server i ServerActive prihvataju i string i listu; Zabbix ocekuje jednu
-# liniju sa vrednostima razdvojenim zarezom.
-_zabbix_agent_server_value: >-
-  {{ role_zabbix_agent_server | join(',')
-     if (role_zabbix_agent_server is sequence and role_zabbix_agent_server is not string)
-     else role_zabbix_agent_server }}
+# ---------------------------------------------------------------------------
+# Sklapanje vrednosti Server i ServerActive
+#
+# Pravilo je isto za oba parametra:
+#   - skalar             -> prepisuje se doslovno (samo se skidaju razmaci)
+#   - ravna lista        -> elementi se spajaju ZAREZOM
+#   - ugnjezdena lista   -> unutrasnja lista se spaja TACKOM-ZAREZOM,
+#                           rezultat ulazi u spoljasnje spajanje zarezom
+#
+# Razlika u znacenju razdvajaca opisana je u defaults/main.yml. Ovde se samo
+# sklapa niska; da li je zapis smislen proverava assert u tasks/main.yml.
+#
+# Zapis koristi Jinja petlju jer se uslovno spajanje po nivoima ne moze
+# izraziti kroz map/join filtere. Oznake {{- i -}} sluze da nijedan prelom
+# reda iz ovog fajla ne zavrsi u vrednosti.
+# ---------------------------------------------------------------------------
 
-_zabbix_agent_server_active_value: >-
-  {{ role_zabbix_agent_server_active | join(',')
-     if (role_zabbix_agent_server_active is sequence and role_zabbix_agent_server_active is not string)
-     else role_zabbix_agent_server_active }}
+_zabbix_agent_server_value: |-
+  {%- if role_zabbix_agent_server is string -%}
+  {{- role_zabbix_agent_server | trim -}}
+  {%- else -%}
+  {%- for entry in role_zabbix_agent_server -%}
+  {{- ',' if not loop.first else '' -}}
+  {{- entry | map('string') | map('trim') | join(';')
+      if (entry is sequence and entry is not string)
+      else (entry | string | trim) -}}
+  {%- endfor -%}
+  {%- endif -%}
 
-# TLS se ukljucuje samim postojanjem PSK vrednosti - nema zasebnog prekidaca
-# koji bi mogao da se raziđe sa stvarnim stanjem.
-_zabbix_agent_tls_enabled: "{{ (role_zabbix_agent_tls_psk | default('') | string | length) > 0 }}"
+_zabbix_agent_server_active_value: |-
+  {%- if role_zabbix_agent_server_active is string -%}
+  {{- role_zabbix_agent_server_active | trim -}}
+  {%- else -%}
+  {%- for entry in role_zabbix_agent_server_active -%}
+  {{- ',' if not loop.first else '' -}}
+  {{- entry | map('string') | map('trim') | join(';')
+      if (entry is sequence and entry is not string)
+      else (entry | string | trim) -}}
+  {%- endfor -%}
+  {%- endif -%}
+
+# Regularni izraz koji hvata prazan element u spisku adresa: razdvajac na
+# pocetku, na kraju, ili dva razdvajaca zaredom. Nastaje kad se u YAML listu
+# potkrade prazan string ili kad se u doslovnom zapisu ostavi zarez visak.
+# Zabbix takav zapis ili odbija ili tiho preskace - ni jedno ni drugo se ne
+# vidi bez citanja logova.
+_zabbix_agent_address_flaw_re: '(^\s*[,;])|([,;]\s*[,;])|([,;]\s*$)'
