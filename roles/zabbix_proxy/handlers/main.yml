@@ -1,5 +1,8 @@
 ---
 # roles/zabbix_proxy/handlers/main.yml
+#
+# Restart, ne reload. Sintaksna greska u include fajlu sprecava
+# pokretanje - bolje je da to odmah bude vidljivo.
 
 - name: "Restartuj Zabbix proxy"
   ansible.builtin.service:
