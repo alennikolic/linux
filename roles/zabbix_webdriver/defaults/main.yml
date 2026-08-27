@@ -1,0 +1,184 @@
+---
+# roles/zabbix_webdriver/defaults/main.yml
+
+# ============================================================================
+# Rola: zabbix_webdriver
+#
+# Podize Selenium WebDriver kao Docker kontejner i drzi ga pod systemd
+# nadzorom. Namenjena je hostu na kojem radi zabbix_server ili zabbix_proxy,
+# jer browser stavke izvrsava BAS taj proces - ne agent.
+#
+# PREDUSLOV: Docker Engine mora vec biti instaliran. Rola ga NE instalira,
+# samo proverava da postoji. Instalacija ide kroz postojece role:
+#
+#   group_vars/apply_repos.yml   -> role_repos_list sa Docker repozitorijumom
+#   group_vars/deploy_packages.yml -> role_packages_install:
+#     - docker-ce
+#     - docker-ce-cli
+#     - containerd.io
+#
+# Zasto systemd, a ne community.docker:
+#   - projekat ostaje na tri postojece kolekcije; community.docker bi trazio
+#     i Python docker SDK na ciljnom hostu
+#   - "docker run" u prvom planu pod systemd-om daje restart pri padu,
+#     pokretanje pri butu i normalan journalctl, sto je sve sto nam treba
+#
+# VAZNO: broj sesija u kontejneru MORA biti najmanje jednak broju
+# StartBrowserPollers u konfiguraciji Zabbix servera ili proxy-ja. Ako je
+# manji, visak zahteva ceka u redu i stavke odlaze u timeout - bez jasne
+# greske, samo sporo i neuredno.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Aktivacija
+# ---------------------------------------------------------------------------
+
+# Prekidac role. Postavlja ga group_vars/deploy_zabbix_webdriver.yml.
+role_zabbix_webdriver_enabled: false
+
+# ---------------------------------------------------------------------------
+# Slika
+# ---------------------------------------------------------------------------
+
+# Selenium standalone slika. Chrome je podrazumevan jer ga Zabbix koristi u
+# svojim primerima i sablonu "Website by Browser".
+#
+# Alternative:
+#   selenium/standalone-firefox
+#   selenium/standalone-edge
+#
+# Za ARM hostove postoji seleniarm/standalone-chromium.
+role_zabbix_webdriver_image: "selenium/standalone-chrome"
+
+# Oznaka slike.
+#
+# "latest" znaci da rola pri svakom prolazu preuzima najnoviju verziju i
+# restartuje kontejner ako se slika promenila. To je zgodno, ali znaci da
+# nadogradnja Selenium-a stize neplanirano.
+#
+# Za predvidljivo ponasanje zakuj verziju:
+#   role_zabbix_webdriver_image_tag: "4.27.0"
+#
+# Dostupne oznake: https://hub.docker.com/r/selenium/standalone-chrome/tags
+role_zabbix_webdriver_image_tag: "latest"
+
+# Kada je true, rola pre pokretanja izvrsava "docker pull". Iskljuci na
+# hostovima bez pristupa internetu, gde se slika donosi rucno.
+role_zabbix_webdriver_pull: true
+
+# ---------------------------------------------------------------------------
+# Mreza
+# ---------------------------------------------------------------------------
+
+# Ime kontejnera i, izvedeno iz njega, ime systemd servisa.
+role_zabbix_webdriver_container_name: "zabbix-webdriver"
+
+# Adresa na kojoj se objavljuje port.
+#
+# 172.17.0.1 je podrazumevani gateway docker0 mosta. Vezivanjem za nju port
+# je dostupan sa samog hosta (dakle Zabbix proxy-ju) i iz drugih kontejnera,
+# ali NE i spolja.
+#
+# Alternativa je 127.0.0.1 - jos uze, dovoljno ako WebDriver koristi iskljucivo
+# lokalni Zabbix proces.
+#
+# PAZNJA: NE stavljaj 0.0.0.0. Docker svoja pravila upisuje u iptables lanac
+# DOCKER, ispred UFW-a, pa objavljen port UFW NECE filtrirati - dobio bi
+# nezasticen WebDriver na javnoj adresi. WebDriver izvrsava proizvoljan
+# JavaScript i otvara proizvoljne URL-ove; to je pun pristup mrezi iznutra.
+role_zabbix_webdriver_bind_address: "172.17.0.1"
+
+# Port na hostu. U kontejneru Selenium uvek slusa na 4444.
+#
+# Ova vrednost mora odgovarati WebDriverURL parametru u konfiguraciji
+# Zabbix proxy-ja ili servera:
+#   WebDriverURL=http://172.17.0.1:4444
+role_zabbix_webdriver_port: 4444
+
+# ---------------------------------------------------------------------------
+# Kapacitet
+# ---------------------------------------------------------------------------
+
+# Broj istovremenih browser sesija.
+#
+# Mora biti >= StartBrowserPollers na Zabbix strani. Svaka sesija je zaseban
+# Chrome proces; racunaj oko 300-500 MB RAM-a po sesiji pod opterecenjem.
+role_zabbix_webdriver_max_sessions: 10
+
+# Deljena memorija za kontejner.
+#
+# Docker podrazumevano daje /dev/shm samo 64 MB. Chrome na toj vrednosti puca
+# sa "session deleted because of page crash", i to tek pod opterecenjem, sto
+# ga cini nezgodnim za dijagnostiku. 2g je preporuka Selenium projekta.
+role_zabbix_webdriver_shm_size: "2g"
+
+# Koliko sekundi sesija sme biti neaktivna pre nego sto je Selenium ugasi.
+role_zabbix_webdriver_session_timeout: 300
+
+# Koliko sekundi zahtev za novom sesijom ceka u redu pre odustajanja.
+# Drzi ovo iznad Zabbix timeout-a za browser stavke.
+role_zabbix_webdriver_session_request_timeout: 300
+
+# Razmak izmedju pokusaja dodele sesije, u sekundama.
+role_zabbix_webdriver_session_retry_interval: 5
+
+# Rezolucija virtuelnog ekrana. Bitno za stavke koje prave snimak ekrana i
+# za sajtove sa responzivnim rasporedom.
+role_zabbix_webdriver_screen_width: 1920
+role_zabbix_webdriver_screen_height: 1080
+
+# Ogranicenja resursa za kontejner. Prazno = bez ogranicenja.
+#
+#   role_zabbix_webdriver_memory_limit: "6g"
+#   role_zabbix_webdriver_cpus: "4"
+#
+# Preporuka: postavi memorijsko ogranicenje. Bez njega odbegli Chrome procesi
+# mogu pojesti RAM hosta i dovesti OOM killer do samog Zabbix proxy-ja.
+role_zabbix_webdriver_memory_limit: ""
+role_zabbix_webdriver_cpus: ""
+
+# ---------------------------------------------------------------------------
+# Dodatna podesavanja
+# ---------------------------------------------------------------------------
+
+# Dodatne promenljive okruzenja za kontejner. Spajaju se sa podrazumevanim
+# skupom iz vars/main.yml i nadjacavaju ga za iste kljuceve.
+#
+# VREDNOSTI PISI KAO STRINGOVE. YAML true/false Jinja ispisuje kao
+# "True"/"False", sto Selenium ne prepoznaje - koristi "true" i "false".
+#
+#   role_zabbix_webdriver_extra_env:
+#     TZ: "Europe/Belgrade"
+#     SE_START_VNC: "true"
+#     SE_NODE_GRID_URL: "http://172.17.0.1:4444"
+role_zabbix_webdriver_extra_env: {}
+
+# Dodatni argumenti za "docker run", doslovno umetnuti u komandu.
+#
+#   role_zabbix_webdriver_extra_docker_args: "--dns 10.0.0.53 --add-host intranet:10.0.0.20"
+role_zabbix_webdriver_extra_docker_args: ""
+
+# ---------------------------------------------------------------------------
+# Servis i provere
+# ---------------------------------------------------------------------------
+
+# Putanja do docker izvrsnog fajla. Menja se samo kod netipicnih instalacija.
+role_zabbix_webdriver_docker_bin: /usr/bin/docker
+
+# Pauza pre ponovnog pokretanja posle pada kontejnera, u sekundama.
+role_zabbix_webdriver_restart_sec: 10
+
+role_zabbix_webdriver_service_enabled: true
+role_zabbix_webdriver_service_state: started
+
+# Kada je true, rola proverava da bind adresa zaista postoji na hostu.
+# Hvata slucaj u kojem docker0 most ima drugaciju podmrezu od podrazumevane,
+# pa "docker run" pada sa nejasnom porukom o dodeli adrese.
+role_zabbix_webdriver_check_bind_address: true
+
+# Kada je true, rola na kraju ceka da WebDriver prijavi spremnost na
+# /status krajnjoj tacki. Prvo pokretanje ume da potraje dok se slika ne
+# raspakuje, pa je timeout darezljiv.
+role_zabbix_webdriver_wait_for_ready: true
+role_zabbix_webdriver_wait_retries: 30
+role_zabbix_webdriver_wait_delay: 5
