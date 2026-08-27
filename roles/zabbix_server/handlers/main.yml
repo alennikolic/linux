@@ -1,5 +1,9 @@
 ---
 # roles/zabbix_server/handlers/main.yml
+#
+# Restart, ne reload. Zabbix server na SIGHUP ponovo cita samo deo
+# parametara, a sintaksna greska u include fajlu sprecava pokretanje -
+# bolje je da to odmah bude vidljivo.
 
 - name: "Restartuj Zabbix server"
   ansible.builtin.service:
