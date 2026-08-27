@@ -27,6 +27,23 @@ _zabbix_agent_reserved_keys:
   - TLSPSKFile
 
 # ---------------------------------------------------------------------------
+# Include direktorijumi koje rola NIKAD ne bira
+#
+# zabbix_agent2.conf ima DVE aktivne Include direktive:
+#   Include=/etc/zabbix/zabbix_agent2.d/*.conf
+#   Include=/etc/zabbix/zabbix_agent2.d/plugins.d/*.conf
+#
+# plugins.d je prostor paketa zabbix-agent2-plugin-*: oni tamo ispustaju
+# svoje konfiguracione fajlove, pa nas drop-in tu nema sta da trazi.
+# Dodatno, Include za plugins.d je POSLEDNJI u fajlu - fajl odatle nadjacava
+# i ono sto bi stajalo u zabbix_agent2.d, sto je tiha zamka.
+#
+# Poredjenje ide po imenu poslednjeg segmenta putanje, ne po celoj putanji,
+# da bi radilo i ako vendor promeni prefiks.
+_zabbix_agent_include_skip_names:
+  - plugins.d
+
+# ---------------------------------------------------------------------------
 # Sklapanje vrednosti Server i ServerActive
 #
 # Pravilo je isto za oba parametra:
@@ -73,7 +90,6 @@ _zabbix_agent_server_active_value: |-
 # Zabbix takav zapis ili odbija ili tiho preskace - ni jedno ni drugo se ne
 # vidi bez citanja logova.
 _zabbix_agent_address_flaw_re: '(^\s*[,;])|([,;]\s*[,;])|([,;]\s*$)'
-
 
 # TLS se ukljucuje samim postojanjem PSK vrednosti - nema zasebnog prekidaca
 # koji bi mogao da se raziđe sa stvarnim stanjem.
