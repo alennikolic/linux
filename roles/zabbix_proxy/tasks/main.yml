@@ -4,14 +4,16 @@
 #   1. Provere
 #   2. Instalacija paketa
 #   3. Folder za SQLite bazu
-#   4. PSK kljuc (opciono)
-#   5. Konfiguracioni fajl
-#   6. Servis
+#   4. Include direktorijum i Include linija
+#   5. PSK kljuc (opciono)
+#   6. Drop-in konfiguracija
+#   7. Servis
 #
-# SQLite bazu proxy kreira sam pri prvom pokretanju — rola samo
-# priprema folder sa ispravnim vlasnikom.
+# SQLite bazu proxy kreira sam pri prvom pokretanju - rola samo priprema
+# folder sa ispravnim vlasnikom.
 
 - name: "Instalacija i konfiguracija Zabbix proxy-ja"
+  when: role_zabbix_proxy_enabled | default(false) | bool
   block:
 
     # -----------------------------------------------------------------
@@ -21,33 +23,22 @@
     - name: "Provera da je distribucija podrzana"
       ansible.builtin.assert:
         that:
-          - ansible_os_family == 'Debian'
+          - ansible_facts['os_family'] == 'Debian'
         fail_msg: >-
           Rola "zabbix_proxy" trenutno podrzava iskljucivo
           Debian/Ubuntu, a ovaj host je
-          {{ ansible_os_family | default('nepoznat') }}.
-        success_msg: "Distribucija je podrzana."
-
-    - name: "Provera izbora backend-a"
-      ansible.builtin.assert:
-        that:
-          - role_zabbix_proxy_db_backend in ['sqlite3', 'mysql', 'pgsql']
-        fail_msg: >-
-          role_zabbix_proxy_db_backend mora biti "sqlite3", "mysql"
-          ili "pgsql", a zadato je
-          "{{ role_zabbix_proxy_db_backend }}".
-        success_msg: "Backend je ispravan."
+          {{ ansible_facts['os_family'] | default('nepoznat') }}.
+        quiet: true
 
     - name: "Provera da je adresa servera zadata"
       ansible.builtin.assert:
         that:
-          - role_zabbix_proxy_server is defined
-          - role_zabbix_proxy_server | length > 0
+          - _zabbix_proxy_server_value | length > 0
         fail_msg: >-
           role_zabbix_proxy_server nije popunjen. Upisi adresu Zabbix
           servera kojem proxy pripada. Bez toga proxy nema kome da
           salje podatke.
-        success_msg: "Adresa servera je zadata."
+        quiet: true
 
     - name: "Provera rezima rada"
       ansible.builtin.assert:
@@ -56,60 +47,118 @@
         fail_msg: >-
           role_zabbix_proxy_mode mora biti 0 (aktivan) ili 1
           (pasivan), a zadato je "{{ role_zabbix_proxy_mode }}".
-        success_msg: "Rezim rada je ispravan."
+        quiet: true
 
-    - name: "Provera lozinke baze"
+    - name: "Provera da je ime proxy-ja zadato"
       ansible.builtin.assert:
         that:
-          - role_zabbix_proxy_db_password | length > 0
+          - role_zabbix_proxy_hostname | length > 0
         fail_msg: >-
-          Backend je "{{ role_zabbix_proxy_db_backend }}", ali
-          role_zabbix_proxy_db_password nije popunjen.
-        success_msg: "Lozinka baze je zadata."
-      when: not _zabbix_proxy_uses_sqlite | bool
+          role_zabbix_proxy_hostname ne sme biti prazan. Vrednost se
+          mora poklapati sa imenom proxy-ja u Zabbix serveru.
+        quiet: true
 
-    - name: "Provera PSK konfiguracije"
+    # SQLite fajl mora imati apsolutnu putanju. Relativna se tumaci u
+    # odnosu na radni direktorijum servisa, sto zavisi od systemd
+    # jedinice i menja se izmedju izdanja.
+    - name: "Provera da je putanja SQLite baze apsolutna"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_proxy_db_name is match('^/')
+        fail_msg: >-
+          role_zabbix_proxy_db_name mora biti apsolutna putanja do
+          SQLite fajla, a zadato je "{{ role_zabbix_proxy_db_name }}".
+        quiet: true
+
+    - name: "Provera da je role_zabbix_proxy_config recnik"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_proxy_config is mapping
+        fail_msg: >-
+          role_zabbix_proxy_config mora biti recnik (kljuc: vrednost).
+        quiet: true
+
+    - name: "Provera da recnik ne sadrzi rezervisane kljuceve"
+      ansible.builtin.assert:
+        that:
+          - (role_zabbix_proxy_config.keys() | list
+             | intersect(_zabbix_proxy_reserved_keys) | length) == 0
+        fail_msg: >-
+          Sledeci kljucevi su rezervisani i rola ih ispisuje sama:
+          {{ role_zabbix_proxy_config.keys() | list
+             | intersect(_zabbix_proxy_reserved_keys) | join(', ') }}.
+          Koristi namenske varijable (role_zabbix_proxy_hostname,
+          role_zabbix_proxy_server, role_zabbix_proxy_mode,
+          role_zabbix_proxy_db_name, role_zabbix_proxy_tls_psk*).
+        quiet: true
+
+    - name: "Provera PSK identiteta"
       ansible.builtin.assert:
         that:
           - role_zabbix_proxy_tls_psk_identity | length > 0
-          - role_zabbix_proxy_tls_psk | length > 0
         fail_msg: >-
-          TLS je postavljen na "psk", ali nedostaje
-          role_zabbix_proxy_tls_psk_identity ili
-          role_zabbix_proxy_tls_psk. Kljuc generisi sa:
-          openssl rand -hex 32
-        success_msg: "PSK konfiguracija je potpuna."
-      when: >-
-        role_zabbix_proxy_tls_connect == 'psk' or
-        role_zabbix_proxy_tls_accept == 'psk'
+          Kada je role_zabbix_proxy_tls_psk postavljen, mora postojati
+          i role_zabbix_proxy_tls_psk_identity.
+        quiet: true
+      when: _zabbix_proxy_tls_enabled | bool
+
+    - name: "Provera formata PSK kljuca"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_proxy_tls_psk is match('^[0-9a-fA-F]{32,}$')
+        fail_msg: >-
+          role_zabbix_proxy_tls_psk mora biti heksadecimalni string od
+          najmanje 32 znaka. Generisi ga sa: openssl rand -hex 32
+        quiet: true
+      no_log: true
+      when: _zabbix_proxy_tls_enabled | bool
 
     # -----------------------------------------------------------------
     # 2. Instalacija
     # -----------------------------------------------------------------
+    # Ako paket nije dostupan, gotovo uvek znaci da Zabbix repozitorijum
+    # nije dodat. Originalna apt greska ostaje u ispisu, a rescue grana
+    # dodaje objasnjenje sta proveriti.
 
-    - name: "Instalacija {{ _zabbix_proxy_package }}"
-      ansible.builtin.apt:
-        name: >-
-          {{ _zabbix_proxy_package }}{{
-             '=' ~ role_zabbix_proxy_version
-             if role_zabbix_proxy_version | length > 0 else '' }}
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-      notify: "Restartuj Zabbix proxy"
+    - name: "Instalacija Zabbix proxy-ja"
+      block:
 
-    # fping je potreban za ICMP provere, a ne dolazi kao zavisnost.
-    - name: "Instalacija fping-a"
-      ansible.builtin.apt:
-        name: fping
-        state: present
+        - name: "Instalacija paketa {{ _zabbix_proxy_package }}"
+          ansible.builtin.apt:
+            name: >-
+              {{ _zabbix_proxy_package }}{{
+                 '=' ~ role_zabbix_proxy_version
+                 if role_zabbix_proxy_version | length > 0 else '' }}
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+          notify: "Restartuj Zabbix proxy"
+
+      rescue:
+
+        - name: "Objasnjenje neuspele instalacije"
+          ansible.builtin.fail:
+            msg: >-
+              Instalacija paketa "{{ _zabbix_proxy_package }}" nije
+              uspela. Najcesci uzrok je da Zabbix repozitorijum nije
+              dodat - host mora biti i u grupi [apply_repos], a
+              apply_repos mora ici pre deploy_zabbix_proxy u
+              playbook.yml. Proveri sa:
+              apt-cache policy {{ _zabbix_proxy_package }}
+              Druga mogucnost je zakovana verzija koja u repozitorijumu
+              ne postoji; dostupne vidis sa:
+              apt-cache madison {{ _zabbix_proxy_package }}
 
     # -----------------------------------------------------------------
     # 3. Folder za SQLite bazu
     # -----------------------------------------------------------------
-    # Sam fajl baze kreira proxy pri prvom pokretanju. Rola priprema
-    # samo folder — proxy ne moze da ga napravi jer radi kao zabbix
-    # korisnik.
+    # Sam fajl se NE kreira - proxy ga pravi pri prvom pokretanju sa
+    # potpunom semom. Prazan fajl koji bi rola napravila proxy bi
+    # protumacio kao ostecenu bazu.
+    #
+    # Vlasnistvo nad FOLDEROM je bitno: SQLite pored baze pravi i
+    # pomocne fajlove (-journal, -wal), pa upis mora biti dozvoljen nad
+    # folderom, ne samo nad fajlom.
 
     - name: "Folder za SQLite bazu"
       ansible.builtin.file:
@@ -117,43 +166,109 @@
         state: directory
         owner: zabbix
         group: zabbix
-        mode: '0750'
-      when: _zabbix_proxy_uses_sqlite | bool
+        mode: "0750"
 
     # -----------------------------------------------------------------
-    # 4. PSK kljuc
+    # 4. Include direktorijum i Include linija
     # -----------------------------------------------------------------
+    # Paket proxy-ja, kao i serverov, ne definise aktivnu Include
+    # direktivu - sve su zakomentarisane, sa upstream putanjom
+    # /usr/local/etc/. Rola je zato dodaje sama.
+    #
+    # Linija ide na SAM KRAJ fajla, jer Zabbix obradjuje Include tamo
+    # gde ga procita: samo tako drop-in nadjacava vrednosti iz glavnog
+    # fajla.
+    #
+    # Maska *.conf je bitna - bez nje bi Zabbix ucitavao i rezervne
+    # kopije i .dpkg-old fajlove iz istog direktorijuma.
+
+    - name: "Kreiranje include direktorijuma"
+      ansible.builtin.file:
+        path: "{{ role_zabbix_proxy_include_dir }}"
+        state: directory
+        owner: root
+        group: zabbix
+        mode: "0750"
+
+    - name: "Aktiviranje Include direktive u glavnoj konfiguraciji"
+      ansible.builtin.blockinfile:
+        path: "{{ _zabbix_proxy_main_conf }}"
+        marker: "# {mark} UPRAVLJA ANSIBLE ROLA: zabbix_proxy"
+        insertafter: EOF
+        block: |
+          Include={{ role_zabbix_proxy_include_dir }}/*.conf
+        backup: true
+      when: role_zabbix_proxy_manage_include | bool
+      notify: "Restartuj Zabbix proxy"
+
+    # Kada korisnik sam odrzava Include liniju, rola proverava da ona
+    # zaista postoji. Bez te provere drop-in bi se upisao, servis bi se
+    # restartovao, sve bi izgledalo uspesno - a nijedna vrednost ne bi
+    # vazila.
+    - name: "Provera postojece Include direktive"
+      ansible.builtin.command:
+        cmd: >-
+          grep -E "^Include\s*=\s*{{ role_zabbix_proxy_include_dir }}(/\*\.conf)?/?\s*$"
+          {{ _zabbix_proxy_main_conf }}
+      register: _zabbix_proxy_include_check
+      changed_when: false
+      failed_when: _zabbix_proxy_include_check.rc not in [0, 1]
+      when: not (role_zabbix_proxy_manage_include | bool)
+
+    - name: "Provera da je drop-in dohvatljiv"
+      ansible.builtin.assert:
+        that:
+          - _zabbix_proxy_include_check.rc == 0
+        fail_msg: >-
+          role_zabbix_proxy_manage_include je false, ali u
+          {{ _zabbix_proxy_main_conf }} nema aktivne Include linije
+          koja pokazuje na {{ role_zabbix_proxy_include_dir }}.
+          Drop-in bi bio upisan, a nijedna vrednost iz njega ne bi
+          vazila. Dodaj liniju rucno ili vrati
+          role_zabbix_proxy_manage_include na true.
+        quiet: true
+      when: not (role_zabbix_proxy_manage_include | bool)
+
+    # -----------------------------------------------------------------
+    # 5. PSK kljuc
+    # -----------------------------------------------------------------
+    # Tajna ide u zaseban fajl sa dozvolama 0600, da bi drop-in mogao
+    # ostati citljiv i bez no_log.
 
     - name: "Upis PSK kljuca"
       ansible.builtin.copy:
-        content: "{{ role_zabbix_proxy_tls_psk }}"
+        content: "{{ role_zabbix_proxy_tls_psk }}\n"
         dest: "{{ role_zabbix_proxy_tls_psk_file }}"
         owner: zabbix
         group: zabbix
-        mode: '0400'
+        mode: "0600"
       no_log: true
-      when: >-
-        role_zabbix_proxy_tls_connect == 'psk' or
-        role_zabbix_proxy_tls_accept == 'psk'
+      when: _zabbix_proxy_tls_enabled | bool
       notify: "Restartuj Zabbix proxy"
 
     # -----------------------------------------------------------------
-    # 5. Konfiguracija
+    # 6. Drop-in konfiguracija
     # -----------------------------------------------------------------
+    # Fajl ne sadrzi tajne - PSK je u zasebnom fajlu - pa moze imati
+    # dozvole 0644 i uobicajeni backup.
+    #
+    # Rezervna kopija je ovde bezbedna zato sto Include koristi masku
+    # *.conf: Ansible backup fajl se zavrsava tildom i ne odgovara
+    # maski. U roli zabbix_agent to nije slucaj, pa je tamo backup
+    # iskljucen.
 
-    - name: "Upis konfiguracionog fajla"
+    - name: "Upis drop-in konfiguracije"
       ansible.builtin.template:
-        src: zabbix_proxy.conf.j2
-        dest: "{{ _zabbix_proxy_config_file }}"
+        src: dropin.conf.j2
+        dest: "{{ _zabbix_proxy_dropin_path }}"
         owner: root
         group: zabbix
-        mode: '0640'
+        mode: "0644"
         backup: true
-      no_log: true
       notify: "Restartuj Zabbix proxy"
 
     # -----------------------------------------------------------------
-    # 6. Servis
+    # 7. Servis
     # -----------------------------------------------------------------
 
     - name: "Servis {{ _zabbix_proxy_service }}"
@@ -161,16 +276,3 @@
         name: "{{ _zabbix_proxy_service }}"
         enabled: "{{ role_zabbix_proxy_service_enabled | bool }}"
         state: "{{ role_zabbix_proxy_service_state }}"
-
-    # -----------------------------------------------------------------
-    # Podsetnik
-    # -----------------------------------------------------------------
-
-    - name: "PODSETNIK: proxy mora biti dodat u Zabbix serveru"
-      ansible.builtin.debug:
-        msg: >-
-          Proxy "{{ role_zabbix_proxy_hostname }}" je instaliran u
-          {{ 'aktivnom' if role_zabbix_proxy_mode | int == 0 else 'pasivnom' }}
-          rezimu. Dodaj ga u Zabbix serveru pod Administration →
-          Proxies, sa TACNO ovim imenom i istim rezimom. Bez toga
-          server odbija podatke.
