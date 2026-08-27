@@ -46,8 +46,9 @@ role_zabbix_agent_enabled: true
 | `role_zabbix_agent_enabled` | `false` | Prekidač role |
 | `role_zabbix_agent_variant` | `agent` | `agent` ili `agent2` |
 | `role_zabbix_agent_package_state` | `present` | `present` ili `latest` |
-| `role_zabbix_agent_server` | `""` | Adrese za pasivne provere (string ili lista) |
-| `role_zabbix_agent_server_active` | `""` | Adrese za aktivne provere, `host:port` |
+| `role_zabbix_agent_server` | `""` | Adrese za pasivne provere |
+| `role_zabbix_agent_server_active` | `""` | Adrese za aktivne provere |
+| `role_zabbix_agent_server_allow_semicolon` | `false` | Dozvoljava `;` u `Server` |
 | `role_zabbix_agent_hostname` | `{{ inventory_hostname }}` | Ime hosta u Zabbix-u |
 | `role_zabbix_agent_config` | `{}` | Slobodan rečnik ostalih parametara |
 | `role_zabbix_agent_extra_config` | `""` | Doslovan tekst na kraju fajla |
@@ -63,18 +64,95 @@ role_zabbix_agent_enabled: true
 Ključevi `Server`, `ServerActive`, `Hostname` i `TLS*` su rezervisani i ne
 smeju se pojaviti u `role_zabbix_agent_config` — `assert` prekida izvršavanje.
 
+## Zadavanje adresa servera
+
+`role_zabbix_agent_server` i `role_zabbix_agent_server_active` prihvataju tri
+oblika zapisa:
+
+| Zapis | Rezultat |
+|---|---|
+| `10.0.0.10` | `10.0.0.10` |
+| `"10.0.0.10,10.0.0.11"` | prepisuje se doslovno |
+| `[10.0.0.10, 10.0.0.11]` | `10.0.0.10,10.0.0.11` |
+| `- [a, b]`<br>`- c` | `a;b,c` |
+
+Ugnježdena lista se spaja tačkom-zarezom, spoljašnja zarezom.
+
+### Zarez i tačka-zarez nisu isto
+
+**`Server`** (pasivne provere) prima **isključivo zarez**. To je spisak adresa
+sa kojih agent prihvata dolazne konekcije; tačka-zarez tu nije razdvajač, pa
+bi cela niska bila protumačena kao jedna adresa i agent bi odbijao konekcije.
+Isto važi i za HA klaster — svi čvorovi se navode razdvojeni zarezom.
+
+Rola zato tačku-zarez u `Server` podrazumevano odbija. Prekidač
+`role_zabbix_agent_server_allow_semicolon: true` isključuje tu proveru.
+
+**`ServerActive`** (aktivne provere) razlikuje oba znaka:
+
+- **`;`** — članovi jednog klastera ili proxy grupe. Agent u datom trenutku
+  šalje podatke samo jednom od njih i sam prelazi na sledeći kad aktivni
+  otkaže.
+- **`,`** — nezavisni serveri ili klasteri. Agent šalje **svima**.
+
+```text
+ServerActive=zbx-a1;zbx-a2,zbx-b:20051
+             └ jedan klaster ┘ └ nezavisan server ┘
+```
+
+### Format adrese
+
+- port se odvaja dvotačkom: `zbx-a2:20051`
+- IPv6 sa portom mora u uglaste zagrade: `[::1]:30051`; bez porta su zagrade
+  opcione
+- razmaci oko razdvajača su dozvoljeni, ali ih rola svejedno uklanja
+
 ## Primeri
 
-Minimalno, aktivne provere:
+Minimalno, aktivne i pasivne provere prema jednom serveru:
 
 ```yaml
-# group_vars/deploy_zabbix_agent.yml
 role_zabbix_agent_enabled: true
 role_zabbix_agent_server: 10.0.0.10
 role_zabbix_agent_server_active: 10.0.0.10:10051
 ```
 
-Sa dodatnim parametrima i korisničkim proverama:
+Dva nezavisna servera:
+
+```yaml
+role_zabbix_agent_server: [10.0.0.10, 10.0.0.11]
+role_zabbix_agent_server_active: [10.0.0.10:10051, 10.0.0.11:10051]
+```
+
+HA klaster od dva čvora — za pasivne zarez, za aktivne tačka-zarez:
+
+```yaml
+role_zabbix_agent_server: [zbx-node1, zbx-node2]
+role_zabbix_agent_server_active:
+  - [zbx-node1, zbx-node2]
+# Server=zbx-node1,zbx-node2
+# ServerActive=zbx-node1;zbx-node2
+```
+
+Klaster plus nezavisan server sa izmenjenim portom:
+
+```yaml
+role_zabbix_agent_server: [zbx-node1, zbx-node2, zbx-solo]
+role_zabbix_agent_server_active:
+  - [zbx-node1, "zbx-node2:20051"]
+  - zbx-solo
+# ServerActive=zbx-node1;zbx-node2:20051,zbx-solo
+```
+
+Proxy grupa:
+
+```yaml
+role_zabbix_agent_server: [proxy1, proxy2, proxy3]
+role_zabbix_agent_server_active:
+  - [proxy1, proxy2, proxy3]
+```
+
+Dodatni parametri i korisničke provere:
 
 ```yaml
 role_zabbix_agent_config:
@@ -94,22 +172,15 @@ role_zabbix_agent_config:
   Plugins.Uptime.Capacity: 1
 ```
 
-Izuzetak po hostu:
-
-```yaml
-# host_vars/srv-db-01.yml
-role_zabbix_agent_hostname: srv-db-01.example.com
-role_zabbix_agent_tls_psk: "{{ vault_zabbix_psk_srv_db_01 }}"
-```
-
-Slanje kroz proksi — samo druga adresa, agent ne zna razliku:
-
-```yaml
-role_zabbix_agent_server: 10.0.0.20
-role_zabbix_agent_server_active: 10.0.0.20:10051
-```
-
 ## Zamke
+
+**Tačka-zarez u `Server`.** Nije razdvajač. Agent ne prijavljuje jasnu grešku
+— jednostavno odbija konekcije, a to se vidi tek kad server prijavi da host
+nije dostupan.
+
+**Proxy i server zajedno u `ServerActive`.** Ako je naveden proxy, server ili
+klaster za taj proxy se ne navodi. Duplo prijavljivanje pravi konfuziju u
+podacima.
 
 **Rezervne kopije u include direktorijumu.** Ako `Include` pokazuje na go
 direktorijum bez `*.conf` maske, Zabbix učitava *svaki* fajl u njemu.
@@ -185,6 +256,13 @@ journalctl -u zabbix-agent -n 50 --no-pager
 zabbix_get -s 10.0.0.31 -k agent.ping
 ```
 
+Bez primene role, samo za proveru kako će se adrese sklopiti:
+
+```bash
+ansible-playbook playbooks/playbook.yml --limit srv-web-01 --tags zabbix_agent \
+  --check --diff
+```
+
 ## Rešavanje problema
 
 **Agent se ne pokreće posle prolaza role.** Skoro uvek sintaksna greška ili
@@ -202,6 +280,9 @@ fajl, ili dodaj `Include` liniju ručno i postavi
 
 **Aktivne provere ne stižu, pasivne rade.** `ServerActive` nije postavljen ili
 se `Hostname` ne poklapa sa imenom hosta u Zabbix-u.
+
+**Podaci stižu duplirano.** U `ServerActive` su čvorovi klastera razdvojeni
+zarezom umesto tačkom-zarezom, pa agent izveštava svima umesto jednom.
 
 **`zabbix_get` javlja da veza nije dozvoljena.** Adresa servera nije u
 `Server`, ili UFW pravilo za port 10050 nedostaje — vidi rolu `firewall`.
