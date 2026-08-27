@@ -191,9 +191,15 @@
       ansible.builtin.set_fact:
         # Prednost ima direktorijum sa maskom - tada zaostali fajlovi bez
         # .conf ekstenzije nisu ukljuceni, pa je sistem otporniji.
+        #
+        # Odbacivanje ide kroz "search" test, jer je "reject" filter koji
+        # prima TEST, a ne filter - "reject('basename', ...)" ne postoji.
+        # Regularni izraz se sklapa od _zabbix_agent_include_skip_names,
+        # uz regex_escape da tacka u "plugins.d" ne bude dzoker.
         _zabbix_agent_include_candidates: >-
           {{ (_zabbix_agent_glob_dirs + _zabbix_agent_plain_dirs)
-             | reject('basename', 'in', _zabbix_agent_include_skip_names)
+             | reject('search', '/(' ~ (_zabbix_agent_include_skip_names
+                                        | map('regex_escape') | join('|')) ~ ')$')
              | list }}
       when: role_zabbix_agent_include_dir | length == 0
 
@@ -288,7 +294,7 @@
     # Ranije verzije role birale su prvu Include direktivu u fajlu, sto je kod
     # agent2 moglo da znaci plugins.d. Ako je fajl tamo ostao, ucitavao bi se
     # zajedno sa ispravnim i nadjacavao ga - plugins.d Include je poslednji u
-    # konfiguraciji. Task briše samo fajl sa NASIM imenom, ne dira ostalo.
+    # konfiguraciji. Task brise samo fajl sa NASIM imenom, ne dira ostalo.
     # -----------------------------------------------------------------------
 
     - name: Ukloni drop-in iz preskocenih direktorijuma
