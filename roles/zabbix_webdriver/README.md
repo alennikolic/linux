@@ -41,7 +41,7 @@ Rola ne traži nove Ansible kolekcije.
 ```ini
 # hosts.ini
 [deploy_zabbix_webdriver]
-dr-itoc-zabbix-proxy01
+zabbix-srv-proxy
 ```
 
 Grupa aktivira rolu preko `group_vars/deploy_zabbix_webdriver.yml`, koji već
@@ -81,7 +81,7 @@ sadrži `role_zabbix_webdriver_enabled: true`.
 ## Primer
 
 ```yaml
-# host_vars/dr-itoc-zabbix-proxy01.yml
+# host_vars/zabbix-srv-proxy.yml
 role_zabbix_webdriver_image_tag: "4.27.0"
 role_zabbix_webdriver_max_sessions: 10
 role_zabbix_webdriver_memory_limit: "6g"
