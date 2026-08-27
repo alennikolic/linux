@@ -185,11 +185,11 @@
         quiet: true
       when: not (role_zabbix_server_manage_include | bool)
 
-- name: "DEBUG Zabbix server config"
-  ansible.builtin.debug:
-    msg:
-      - "role_zabbix_server_config = {{ role_zabbix_server_config }}"
-      - "CacheSize = {{ role_zabbix_server_config['CacheSize'] | default('NIJE DEFINISAN') }}"
+    - name: "DEBUG Zabbix server config"
+      ansible.builtin.debug:
+        msg:
+          - "role_zabbix_server_config = {{ role_zabbix_server_config }}"
+          - "CacheSize = {{ role_zabbix_server_config['CacheSize'] | default('NIJE DEFINISAN') }}"
 
 
     # -----------------------------------------------------------------
