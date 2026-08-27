@@ -146,6 +146,10 @@
     #
     # Cita se instalirana konfiguracija i iz nje izvlace Include linije.
     # Fajl se NE MENJA - slurp je citanje, ostaje idempotentno.
+    #
+    # agent2 ima DVE aktivne Include direktive, pa izbor ne sme da zavisi od
+    # redosleda linija u fajlu. Direktorijumi iz _zabbix_agent_include_skip_names
+    # (plugins.d) se odbacuju - to je prostor plugin paketa.
     # -----------------------------------------------------------------------
 
     - name: Ucitaj glavnu konfiguraciju agenta
@@ -168,15 +172,29 @@
              | list }}
       when: role_zabbix_agent_include_dir | length == 0
 
-    - name: Odaberi Include vrednost koja pokazuje na direktorijum
+    - name: Svedi Include vrednosti na direktorijume
       ansible.builtin.set_fact:
-        # Prednost ima vrednost sa maskom (.../*.conf), zatim vrednost koja
-        # se zavrsava kosom crtom. Vrednosti koje pokazuju na pojedinacan
-        # fajl se preskacu - u njih ne mozemo nista da upisemo.
-        _zabbix_agent_include_glob: >-
-          {{ ((_zabbix_agent_include_values | select('search', '\*') | list)
-              + (_zabbix_agent_include_values | select('search', '/$') | list)
-              + ['']) | first }}
+        # Vrednost sa maskom (.../*.conf) -> uzima se roditeljski direktorijum.
+        # Vrednost koja se zavrsava kosom crtom -> sama je direktorijum.
+        # Vrednosti koje pokazuju na pojedinacan fajl se preskacu - u njih se
+        # ne moze upisati drop-in.
+        _zabbix_agent_glob_dirs: >-
+          {{ _zabbix_agent_include_values
+             | select('search', '\*') | map('dirname') | unique | list }}
+        _zabbix_agent_plain_dirs: >-
+          {{ _zabbix_agent_include_values
+             | reject('search', '\*') | select('search', '/$')
+             | map('regex_replace', '/+$', '') | unique | list }}
+      when: role_zabbix_agent_include_dir | length == 0
+
+    - name: Odaberi include direktorijum
+      ansible.builtin.set_fact:
+        # Prednost ima direktorijum sa maskom - tada zaostali fajlovi bez
+        # .conf ekstenzije nisu ukljuceni, pa je sistem otporniji.
+        _zabbix_agent_include_candidates: >-
+          {{ (_zabbix_agent_glob_dirs + _zabbix_agent_plain_dirs)
+             | reject('basename', 'in', _zabbix_agent_include_skip_names)
+             | list }}
       when: role_zabbix_agent_include_dir | length == 0
 
     - name: Odredi include direktorijum
@@ -184,27 +202,36 @@
         _zabbix_agent_include_dir: >-
           {{ role_zabbix_agent_include_dir
              if (role_zabbix_agent_include_dir | length > 0)
-             else (_zabbix_agent_include_glob | dirname
-                   if ('*' in _zabbix_agent_include_glob)
-                   else (_zabbix_agent_include_glob | regex_replace('/+$', ''))) }}
-        # Ako maska *.conf postoji, zaostali fajlovi bez te ekstenzije nisu
-        # ukljuceni i stroga provera nije potrebna. Kod rucno zadate putanje
-        # ne znamo kako Include izgleda, pa se ide na stroziju pretpostavku.
-        _zabbix_agent_include_has_glob: >-
-          {{ ('*' in _zabbix_agent_include_glob)
-             if (role_zabbix_agent_include_dir | length == 0)
-             else false }}
+             else ((_zabbix_agent_include_candidates | default([])) + ['']) | first }}
 
     - name: Provera - include direktorijum je pronadjen
       ansible.builtin.assert:
         that:
           - _zabbix_agent_include_dir | length > 0
         fail_msg: >-
-          U {{ _zabbix_agent_main_conf }} nije pronadjena nijedna aktivna
-          Include direktiva koja pokazuje na direktorijum. Bez nje drop-in
-          fajl ne bi bio ucitan. Dodaj Include liniju u glavnu konfiguraciju
-          i postavi role_zabbix_agent_include_dir na tu putanju.
+          U {{ _zabbix_agent_main_conf }} nije pronadjena nijedna upotrebljiva
+          Include direktiva. Pronadjeno:
+          {{ _zabbix_agent_include_values | default([]) | join(', ') | default('nista', true) }}.
+          Direktorijumi {{ _zabbix_agent_include_skip_names | join(', ') }}
+          se namerno preskacu. Dodaj Include liniju u glavnu konfiguraciju
+          ili postavi role_zabbix_agent_include_dir na zeljenu putanju.
         quiet: true
+
+    - name: Utvrdi da li izabrani direktorijum ima *.conf masku
+      ansible.builtin.set_fact:
+        # Bitno samo za proveru zaostalih fajlova nize. Kod rucno zadate
+        # putanje ne znamo kako Include izgleda, pa se ide na stroziju
+        # pretpostavku (bez maske).
+        _zabbix_agent_include_has_glob: >-
+          {{ (_zabbix_agent_glob_dirs | default([])) is contains(_zabbix_agent_include_dir)
+             if (role_zabbix_agent_include_dir | length == 0)
+             else false }}
+
+    - name: Prikazi izabrani include direktorijum
+      ansible.builtin.debug:
+        msg: >-
+          Drop-in ide u {{ _zabbix_agent_include_dir }}/{{ role_zabbix_agent_dropin_name }}
+          ({{ 'maska *.conf' if (_zabbix_agent_include_has_glob | bool) else 'ceo direktorijum' }})
 
     - name: Obezbedi postojanje include direktorijuma
       ansible.builtin.file:
@@ -254,6 +281,22 @@
       when:
         - role_zabbix_agent_include_strict | bool
         - not (_zabbix_agent_include_has_glob | bool)
+
+    # -----------------------------------------------------------------------
+    # Uklanjanje drop-in fajla sa pogresnog mesta
+    #
+    # Ranije verzije role birale su prvu Include direktivu u fajlu, sto je kod
+    # agent2 moglo da znaci plugins.d. Ako je fajl tamo ostao, ucitavao bi se
+    # zajedno sa ispravnim i nadjacavao ga - plugins.d Include je poslednji u
+    # konfiguraciji. Task briše samo fajl sa NASIM imenom, ne dira ostalo.
+    # -----------------------------------------------------------------------
+
+    - name: Ukloni drop-in iz preskocenih direktorijuma
+      ansible.builtin.file:
+        path: "{{ _zabbix_agent_include_dir }}/{{ item }}/{{ role_zabbix_agent_dropin_name }}"
+        state: absent
+      loop: "{{ _zabbix_agent_include_skip_names }}"
+      notify: Restartuj Zabbix agenta
 
     # -----------------------------------------------------------------------
     # PSK
