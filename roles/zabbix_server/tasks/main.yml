@@ -3,14 +3,16 @@
 #
 #   1. Provere
 #   2. Instalacija paketa
-#   3. Konfiguracioni fajl
-#   4. Servis
+#   3. Include direktorijum i Include linija
+#   4. Drop-in konfiguracija
+#   5. Servis
 #
-# Rola bazu NE dira. Ne kreira je, ne uvozi semu, ne menja
-# privilegije — samo upisuje podatke o vezi u konfiguraciju. Ceo
-# posao nad bazom radi rola "zabbix_db", na hostu baze.
+# Rola bazu NE dira. Ne kreira je, ne uvozi semu, ne menja privilegije -
+# samo upisuje podatke o vezi. Ceo posao nad bazom radi rola "zabbix_db",
+# na hostu baze.
 
 - name: "Instalacija i konfiguracija Zabbix servera"
+  when: role_zabbix_server_enabled | default(false) | bool
   block:
 
     # -----------------------------------------------------------------
@@ -20,12 +22,12 @@
     - name: "Provera da je distribucija podrzana"
       ansible.builtin.assert:
         that:
-          - ansible_os_family == 'Debian'
+          - ansible_facts['os_family'] == 'Debian'
         fail_msg: >-
           Rola "zabbix_server" trenutno podrzava iskljucivo
           Debian/Ubuntu, a ovaj host je
-          {{ ansible_os_family | default('nepoznat') }}.
-        success_msg: "Distribucija je podrzana."
+          {{ ansible_facts['os_family'] | default('nepoznat') }}.
+        quiet: true
 
     - name: "Provera izbora backend-a"
       ansible.builtin.assert:
@@ -34,7 +36,7 @@
         fail_msg: >-
           role_zabbix_server_db_backend mora biti "mysql" ili "pgsql",
           a zadato je "{{ role_zabbix_server_db_backend }}".
-        success_msg: "Backend je ispravan."
+        quiet: true
 
     - name: "Provera da je lozinka baze zadata"
       ansible.builtin.assert:
@@ -45,7 +47,7 @@
           role_zabbix_server_db_password nije popunjen. Upisi ga u
           host_vars/<host>.yml na kontrolnom cvoru. Mora biti ISTA
           vrednost kao role_zabbix_db_password na hostu baze.
-        success_msg: "Lozinka baze je zadata."
+        quiet: true
 
     # Ime hosta "localhost" MySQL klijent tumaci kao unix socket i
     # ignorise DBPort. Za bazu na drugom hostu to znaci da se server
@@ -59,18 +61,40 @@
           role_zabbix_server_db_socket. Za bazu na drugom hostu upisi
           IP adresu u role_zabbix_server_db_host i ostavi socket
           prazan.
-        success_msg: "Podesavanja veze sa bazom su konzistentna."
+        quiet: true
       when: role_zabbix_server_db_host == 'localhost'
+
+    - name: "Provera da je role_zabbix_server_config recnik"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_server_config is mapping
+        fail_msg: >-
+          role_zabbix_server_config mora biti recnik (kljuc: vrednost).
+        quiet: true
+
+    - name: "Provera da recnik ne sadrzi rezervisane kljuceve"
+      ansible.builtin.assert:
+        that:
+          - (role_zabbix_server_config.keys() | list
+             | intersect(_zabbix_server_reserved_keys) | length) == 0
+        fail_msg: >-
+          Sledeci kljucevi su rezervisani i rola ih ispisuje sama:
+          {{ role_zabbix_server_config.keys() | list
+             | intersect(_zabbix_server_reserved_keys) | join(', ') }}.
+          Za podatke o bazi koristi namenske varijable
+          (role_zabbix_server_db_host, _db_name, _db_user,
+          _db_password, _db_socket, _db_port).
+        quiet: true
 
     # -----------------------------------------------------------------
     # 2. Instalacija
     # -----------------------------------------------------------------
-    # Paket zabbix-sql-scripts se ovde vise NE instalira — dolazi uz
-    # rolu "zabbix_db", na hostu baze, gde se sema i uvozi.
+    # Paket zabbix-sql-scripts se ovde NE instalira - dolazi uz rolu
+    # "zabbix_db", na hostu baze, gde se sema i uvozi.
     #
-    # Ako paket nije dostupan, gotovo uvek znaci da Zabbix
-    # repozitorijum nije dodat. Originalna apt greska ostaje u ispisu,
-    # a rescue grana ispod dodaje objasnjenje sta proveriti.
+    # Ako paket nije dostupan, gotovo uvek znaci da Zabbix repozitorijum
+    # nije dodat. Originalna apt greska ostaje u ispisu, a rescue grana
+    # dodaje objasnjenje sta proveriti.
 
     - name: "Instalacija Zabbix servera"
       block:
@@ -93,34 +117,98 @@
             msg: >-
               Instalacija paketa "{{ _zabbix_server_package }}" nije
               uspela. Najcesci uzrok je da Zabbix repozitorijum nije
-              dodat — host mora biti i u grupi [apply_repos], a
+              dodat - host mora biti i u grupi [apply_repos], a
               apply_repos mora ici pre deploy_zabbix_server u
               playbook.yml. Proveri sa:
               apt-cache policy {{ _zabbix_server_package }}
-              Druga mogucnost je zakovana verzija koja u
-              repozitorijumu ne postoji; dostupne vidis sa:
+              Druga mogucnost je zakovana verzija koja u repozitorijumu
+              ne postoji; dostupne vidis sa:
               apt-cache madison {{ _zabbix_server_package }}
 
     # -----------------------------------------------------------------
-    # 3. Konfiguracija
+    # 3. Include direktorijum i Include linija
+    # -----------------------------------------------------------------
+    # Za razliku od agenta, paket servera ne definise aktivnu Include
+    # direktivu - sve su zakomentarisane, i to sa upstream putanjom
+    # /usr/local/etc/. Rola je zato dodaje sama.
+    #
+    # Linija ide na SAM KRAJ fajla, jer Zabbix obradjuje Include tamo gde
+    # ga procita: samo tako drop-in nadjacava vrednosti iz glavnog fajla.
+    #
+    # Maska *.conf je bitna - bez nje bi Zabbix ucitavao i rezervne
+    # kopije i .dpkg-old fajlove iz istog direktorijuma.
+
+    - name: "Kreiranje include direktorijuma"
+      ansible.builtin.file:
+        path: "{{ role_zabbix_server_include_dir }}"
+        state: directory
+        owner: root
+        group: zabbix
+        mode: "0750"
+
+    - name: "Aktiviranje Include direktive u glavnoj konfiguraciji"
+      ansible.builtin.blockinfile:
+        path: "{{ _zabbix_server_main_conf }}"
+        marker: "# {mark} UPRAVLJA ANSIBLE ROLA: zabbix_server"
+        insertafter: EOF
+        block: |
+          Include={{ role_zabbix_server_include_dir }}/*.conf
+        backup: true
+      when: role_zabbix_server_manage_include | bool
+      notify: "Restartuj Zabbix server"
+
+    # Kada korisnik sam odrzava Include liniju, rola proverava da ona
+    # zaista postoji. Bez te provere drop-in bi se upisao, servis bi se
+    # restartovao, sve bi izgledalo uspesno - a nijedna vrednost ne bi
+    # vazila.
+    - name: "Provera postojece Include direktive"
+      ansible.builtin.command:
+        cmd: >-
+          grep -E "^Include\s*=\s*{{ role_zabbix_server_include_dir }}(/\*\.conf)?/?\s*$"
+          {{ _zabbix_server_main_conf }}
+      register: _zabbix_server_include_check
+      changed_when: false
+      failed_when: _zabbix_server_include_check.rc not in [0, 1]
+      when: not (role_zabbix_server_manage_include | bool)
+
+    - name: "Provera da je drop-in dohvatljiv"
+      ansible.builtin.assert:
+        that:
+          - _zabbix_server_include_check.rc == 0
+        fail_msg: >-
+          role_zabbix_server_manage_include je false, ali u
+          {{ _zabbix_server_main_conf }} nema aktivne Include linije
+          koja pokazuje na {{ role_zabbix_server_include_dir }}.
+          Drop-in bi bio upisan, a nijedna vrednost iz njega ne bi
+          vazila. Dodaj liniju rucno ili vrati
+          role_zabbix_server_manage_include na true.
+        quiet: true
+      when: not (role_zabbix_server_manage_include | bool)
+
+    # -----------------------------------------------------------------
+    # 4. Drop-in konfiguracija
     # -----------------------------------------------------------------
     # Fajl sadrzi lozinku baze, pa ima dozvole 0640 i grupu zabbix.
     # no_log: true znaci da --diff nece prikazati razliku; to je cena
     # zastite lozinke.
+    #
+    # backup je NAMERNO iskljucen: rezervna kopija bi zavrsila u istom
+    # direktorijumu i sadrzala lozinku u citljivom obliku. Prethodna
+    # verzija je ionako u git-u i u varijablama.
 
-    - name: "Upis konfiguracionog fajla"
+    - name: "Upis drop-in konfiguracije"
       ansible.builtin.template:
-        src: zabbix_server.conf.j2
-        dest: "{{ _zabbix_server_config_file }}"
+        src: dropin.conf.j2
+        dest: "{{ _zabbix_server_dropin_path }}"
         owner: root
         group: zabbix
-        mode: '0640'
-        backup: true
+        mode: "0640"
+        backup: false
       no_log: true
       notify: "Restartuj Zabbix server"
 
     # -----------------------------------------------------------------
-    # 4. Servis
+    # 5. Servis
     # -----------------------------------------------------------------
 
     - name: "Servis {{ _zabbix_server_service }}"
@@ -128,5 +216,3 @@
         name: "{{ _zabbix_server_service }}"
         enabled: "{{ role_zabbix_server_service_enabled | bool }}"
         state: "{{ role_zabbix_server_service_state }}"
-
-  when: role_zabbix_server_enabled | default(false) | bool
