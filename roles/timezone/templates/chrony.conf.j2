@@ -1,19 +1,66 @@
-{{ '#' }} /etc/chrony/conf.d/99-ansible.conf
-{{ '#' }}
+{{ '#' }} =====================================================================
 {{ '#' }} UPRAVLJA ANSIBLE ROLA: timezone
-{{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju.
 {{ '#' }}
-{{ '#' }} Drop-in fajl, ucitava se iz /etc/chrony/chrony.conf preko
-{{ '#' }} direktive "confdir". Izvori ispod se DODAJU na one iz
-{{ '#' }} osnovnog fajla — vidi role_timezone_chrony_disable_default_pools.
-{{ '#' }}
-{{ '#' }} Provera stanja:  chronyc sources -v
+{{ '#' }} Fajl se upisuje u celosti pri svakom pokretanju role.
+{{ '#' }} Rucne izmene se GUBE. Parametre menjaj u:
+{{ '#' }}   group_vars/all.yml   ili   host_vars/{{ inventory_hostname }}.yml
+{{ '#' }} =====================================================================
 
-{% for _source in role_timezone_ntp_servers %}
-{{ role_timezone_chrony_source_type }} {{ _source }}{{ ' iburst' if role_timezone_chrony_iburst | bool else '' }}
+
+{{ '#' }} ---------------------------------------------------------------------
+{{ '#' }} Izvori vremena
+{{ '#' }} ---------------------------------------------------------------------
+{{ '#' }} Ovo je jedini spisak izvora koji host koristi. Podrazumevani
+{{ '#' }} Ubuntu izvori, drop-in fajlovi iz /etc/chrony/conf.d i izvori
+{{ '#' }} koje deli DHCP namerno nisu ukljuceni — konfiguracija je
+{{ '#' }} zatvorena, da bi "odakle host uzima vreme" imalo jedan odgovor.
+{{ '#' }}
+{{ '#' }} iburst salje prve upite u brzom nizu, pa se sat sinhronizuje
+{{ '#' }} u sekundama umesto u minutima posle pokretanja servisa.
+
+{% for _ntp_source in role_timezone_ntp_servers %}
+{{ role_timezone_ntp_source_type }} {{ _ntp_source }} iburst
 {% endfor %}
-{% if role_timezone_chrony_makestep | length > 0 %}
 
-{{ '#' }} Skokovit ispravak vremena u prvim merenjima posle pokretanja.
-makestep {{ role_timezone_chrony_makestep }}
-{% endif %}
+
+{{ '#' }} ---------------------------------------------------------------------
+{{ '#' }} Ponasanje sata
+{{ '#' }} ---------------------------------------------------------------------
+
+{{ '#' }} Skokovit ispravak vremena umesto postepenog usporavanja sata:
+{{ '#' }} u prva 3 merenja, ako je razlika veca od 1 sekunde, postavi
+{{ '#' }} vreme odmah. Bez toga bi masina sa satom pomerenim za nekoliko
+{{ '#' }} minuta konvergirala satima.
+makestep 1.0 3
+
+{{ '#' }} Kernel povremeno upisuje sistemsko vreme u hardverski sat, pa
+{{ '#' }} masina posle restarta ne krece od pogresne vrednosti.
+rtcsync
+
+{{ '#' }} Fajl u kome chrony pamti sistematsko odstupanje lokalnog sata.
+{{ '#' }} Zahvaljujuci njemu je sat tacan i pre nego sto stigne prvi
+{{ '#' }} odgovor NTP servera.
+driftfile /var/lib/chrony/chrony.drift
+
+{{ '#' }} Gornja granica procenjene greske merenja. Vrednost je iz
+{{ '#' }} podrazumevane Debian konfiguracije.
+maxupdateskew 100.0
+
+{{ '#' }} Baza prestupnih sekundi. Bez ove linije chrony pri prestupnoj
+{{ '#' }} sekundi samo uspori sat umesto da je pravilno obradi.
+leapsectz right/UTC
+
+
+{{ '#' }} ---------------------------------------------------------------------
+{{ '#' }} Kljucevi i logovi
+{{ '#' }} ---------------------------------------------------------------------
+
+{{ '#' }} Kljucevi za simetricnu autentifikaciju izvora.
+keyfile /etc/chrony/chrony.keys
+
+{{ '#' }} Folder u kome se cuvaju NTS kljucevi i sertifikati.
+ntsdumpdir /var/lib/chrony
+
+{{ '#' }} Folder za logove. Sami logovi se ne ukljucuju — chrony
+{{ '#' }} podrazumevano pise u syslog, sto je dovoljno.
+logdir /var/log/chrony
