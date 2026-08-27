@@ -1,0 +1,56 @@
+{{ '#' }} {{ _zabbix_webdriver_unit_path }}
+{{ '#' }} ============================================================================
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: zabbix_webdriver
+{{ '#' }}
+{{ '#' }} Rucne izmene bice prepisane pri sledecem pokretanju role.
+{{ '#' }} Podesavanja se menjaju kroz group_vars ili host_vars kontrolnog cvora.
+{{ '#' }} ============================================================================
+
+[Unit]
+Description=Selenium WebDriver za Zabbix browser stavke
+Documentation=https://www.zabbix.com/documentation/current/en/manual/config/items/itemtypes/browser
+{{ '#' }} Docker mora biti podignut pre pokretanja, i ostati podignut.
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec={{ role_zabbix_webdriver_restart_sec }}
+
+{{ '#' }} Prvo pokretanje raspakuje slikovni sloj od nekoliko stotina megabajta,
+{{ '#' }} sto ume da predje podrazumevanih 90 sekundi. Bez ovoga systemd bi
+{{ '#' }} proglasio neuspeh dok se kontejner jos podize.
+TimeoutStartSec=0
+TimeoutStopSec=60
+
+{{ '#' }} Zaostali kontejner iz prethodnog, neurednog gasenja bi zauzeo ime.
+{{ '#' }} Vodeca crta znaci da neuspeh ove komande ne obara pokretanje.
+ExecStartPre=-{{ role_zabbix_webdriver_docker_bin }} rm -f {{ role_zabbix_webdriver_container_name }}
+
+{{ '#' }} Kontejner radi u prvom planu; systemd prati bas taj proces, a izlaz
+{{ '#' }} zavrsava u journalctl-u.
+ExecStart={{ role_zabbix_webdriver_docker_bin }} run \
+    --rm \
+    --name {{ role_zabbix_webdriver_container_name }} \
+    --shm-size={{ role_zabbix_webdriver_shm_size }} \
+    --publish {{ role_zabbix_webdriver_bind_address }}:{{ role_zabbix_webdriver_port }}:4444 \
+{% if role_zabbix_webdriver_memory_limit | length > 0 %}
+    --memory {{ role_zabbix_webdriver_memory_limit }} \
+{% endif %}
+{% if role_zabbix_webdriver_cpus | length > 0 %}
+    --cpus {{ role_zabbix_webdriver_cpus }} \
+{% endif %}
+{% for key, value in _zabbix_webdriver_env | dictsort %}
+    --env "{{ key }}={{ value }}" \
+{% endfor %}
+{% if role_zabbix_webdriver_extra_docker_args | length > 0 %}
+    {{ role_zabbix_webdriver_extra_docker_args }} \
+{% endif %}
+    {{ _zabbix_webdriver_image_ref }}
+
+{{ '#' }} Selenium prima SIGTERM i uredno zatvara otvorene sesije.
+ExecStop={{ role_zabbix_webdriver_docker_bin }} stop -t 30 {{ role_zabbix_webdriver_container_name }}
+
+[Install]
+WantedBy=multi-user.target
