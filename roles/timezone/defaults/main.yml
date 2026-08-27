@@ -1,8 +1,11 @@
 ---
 # roles/timezone/defaults/main.yml
 #
-# Rola "timezone" postavlja vremensku zonu sistema i, opciono,
-# konfigurise sinhronizaciju vremena (systemd-timesyncd ili chrony).
+# Rola "timezone" radi tri stvari i nista vise:
+#
+#   1. postavlja vremensku zonu sistema
+#   2. instalira chrony i upisuje spisak NTP izvora
+#   3. restartuje ono sto mora da se restartuje
 #
 # Aktivacija ide preko clanstva hosta u grupi [apply_timezone], koja
 # kroz group_vars/apply_timezone.yml postavlja role_timezone_enabled.
@@ -12,8 +15,8 @@
 #   group_vars/all.yml        — globalno
 #   host_vars/<host>.yml      — za pojedinacan host
 #
-# Rola ne menja sistem nepovratno. Svaka izmena se moze vratiti, a
-# svaki fajl koji rola upisuje ili menja dobija backup.
+# Rola ne menja sistem nepovratno. Fajl /etc/chrony/chrony.conf se
+# upisuje u celosti, ali svaka verzija dobija backup.
 
 
 # =====================================================================
@@ -33,7 +36,8 @@ role_timezone_enabled: false
 #
 # Rola pre postavljanja proverava da zona postoji u
 # /usr/share/zoneinfo. Bez te provere greska u kucanju bi se
-# manifestovala kao nejasna poruka iz timedatectl-a.
+# manifestovala kao nejasna poruka iz timedatectl-a. Imena razlikuju
+# velika i mala slova: Europe/Belgrade jeste, europe/belgrade nije.
 #
 # Podrazumevano je Etc/UTC — neutralna vrednost. Stvarnu zonu zadaj
 # u group_vars/all.yml, na primer:
@@ -42,26 +46,18 @@ role_timezone_enabled: false
 #
 role_timezone_name: Etc/UTC
 
-# Rezim hardverskog sata: UTC ili local.
-#
-# Prazna vrednost znaci "ne diraj" — to je podrazumevano i gotovo
-# uvek ispravno. Menjaj samo ako sistem deli disk sa Windows-om,
-# gde se ocekuje local.
-#
-# PAZNJA: u virtuelnim masinama i kontejnerima postavljanje ove
-# vrednosti moze da padne jer hardverski sat nije dostupan.
-#
-role_timezone_hwclock: ""
-
 # Servisi koje treba restartovati POSLE promene zone.
 #
 # Neki demoni procitaju TZ jednom, pri pokretanju, i posle promene
 # zone nastave da pisu vreme po staroj. Najcesci primeri su cron i
-# rsyslog. systemd servisi i novije verzije vecine demona ovo rese
-# same, pa je lista podrazumevano prazna.
+# rsyslog. Vecina systemd servisa ovo resi sama, pa je lista
+# podrazumevano prazna.
 #
 # Restart se izvrsava iskljucivo ako je zona STVARNO promenjena —
 # ponovljeno pokretanje role nista ne restartuje.
+#
+# Servis koji nije instaliran prekida rad role, pa u listu upisuj
+# samo ono sto na hostu zaista postoji.
 #
 #   role_timezone_restart_services:
 #     - cron
@@ -71,87 +67,46 @@ role_timezone_restart_services: []
 
 
 # =====================================================================
-# SINHRONIZACIJA VREMENA
+# SINHRONIZACIJA VREMENA (chrony)
 # =====================================================================
-# Podrazumevano ISKLJUCENO. Vecina distribucija vec ima ispravno
-# podesen NTP, pa je "ne diraj" bezbednija polazna tacka.
-#
-# Ukljuci kada hostovi moraju da koriste interni NTP izvor (tipicno
-# u mrezi bez izlaza na internet) ili kada je tacno vreme uslov za
-# rad neke druge komponente — Zabbix, Kerberos, sertifikati.
+# Rola uvek instalira chrony i uvek upisuje ceo /etc/chrony/chrony.conf.
+# Nema izbora izmedju chrony-ja i systemd-timesyncd — jedan demon,
+# jedan fajl, jedno mesto na kome se gleda sta host koristi.
 
-role_timezone_ntp_enabled: false
-
-# Koji demon se koristi. Dozvoljene vrednosti:
+# Spisak NTP izvora. OBAVEZAN — rola prekida rad ako je lista prazna,
+# jer bi u suprotnom upisala konfiguraciju bez ijednog izvora i
+# ostavila host da tiho ne sinhronizuje vreme.
 #
-#   systemd-timesyncd  — vec prisutan na Ubuntu/Debian sistemima,
-#                        prost SNTP klijent, dovoljan za obican server
-#   chrony             — puna NTP implementacija, brza konvergencija,
-#                        bolje ponasanje na masinama koje se suspenduju
-#
-# NAPOMENA: chrony.service ima "Conflicts=systemd-timesyncd.service",
-# pa pokretanjem chrony-ja timesyncd sam prestaje da radi. Rola ne
-# mora nista posebno da gasi.
-#
-role_timezone_ntp_service: systemd-timesyncd
-
-# Spisak NTP izvora. OBAVEZNO kada je role_timezone_ntp_enabled true —
-# rola prekida rad ako je lista prazna, jer bi upisala konfiguraciju
-# bez ijednog servera.
+# Interni izvori u zatvorenoj mrezi:
 #
 #   role_timezone_ntp_servers:
 #     - ntp1.example.com
 #     - ntp2.example.com
 #     - 10.0.0.53
 #
+# Javni pool (uz role_timezone_ntp_source_type: pool):
+#
+#   role_timezone_ntp_servers:
+#     - 0.pool.ntp.org
+#     - 1.pool.ntp.org
+#
+# VAZNO: sta god ovde upises je JEDINI spisak izvora koji host
+# koristi. Podrazumevani Ubuntu izvori, drop-in fajlovi iz
+# /etc/chrony/conf.d i izvori koje deli DHCP se ne ucitavaju.
+#
 role_timezone_ntp_servers: []
 
-# Rezervni izvori. Koristi ih samo systemd-timesyncd (direktiva
-# FallbackNTP); chrony nema ekvivalent i ova lista se za njega
-# ignorise.
+# Direktiva koja se upisuje ispred svake adrese:
 #
-role_timezone_ntp_fallback_servers: []
-
-
-# ---------------------------------------------------------------------
-# chrony — dodatni parametri
-# ---------------------------------------------------------------------
-# Vaze samo kada je role_timezone_ntp_service: chrony
-
-# Tip izvora koji se upisuje ispred svake adrese:
+#   server  — jedna adresa je jedan izvor. Ovo se koristi za interne
+#             NTP servere i uopste za sve sto ima stabilnu adresu.
 #
-#   server  — jedna adresa, jedan izvor (interni NTP)
-#   pool    — jedno ime koje se razresava u vise adresa (pool.ntp.org)
-#   peer    — ravnopravan odnos, za medjusobno uparene NTP servere
+#   pool    — jedno ime se razresava u vise adresa, chrony ih koristi
+#             sve. Ima smisla iskljucivo za *.pool.ntp.org i slicne
+#             rotirajuce zapise.
 #
-role_timezone_chrony_source_type: server
-
-# iburst ubrzava prvu sinhronizaciju posle pokretanja servisa.
+# Direktiva vazi za CELU listu, pa se javni pool i interni server ne
+# mesaju u istoj konfiguraciji. To je namerno — host u produkciji
+# treba da ima jedan izvor istine o vremenu.
 #
-role_timezone_chrony_iburst: true
-
-# Dozvoljava skokovit ispravak vremena umesto postepenog usporavanja
-# sata. Format: "<prag u sekundama> <broj prvih merenja>".
-#
-# Podrazumevano "1.0 3" znaci: u prva tri merenja, ako je razlika
-# veca od sekunde, postavi vreme odmah. Bez toga bi masina sa satom
-# pomerenim za nekoliko minuta konvergirala satima.
-#
-# Prazna vrednost = ne upisuj direktivu.
-#
-role_timezone_chrony_makestep: "1.0 3"
-
-# Gasi podrazumevane "pool" linije u /etc/chrony/chrony.conf.
-#
-# Rola svoju konfiguraciju upisuje kao drop-in u /etc/chrony/conf.d/,
-# sto znaci da se izvori DODAJU na one iz osnovnog fajla. Na Ubuntu
-# sistemu to su ntp.ubuntu.com i slicni, koji u zatvorenoj mrezi
-# samo prave nepotreban saobracaj i cekanja.
-#
-# Kada je true, rola u osnovnom fajlu zakomentarise sve pool linije
-# (uz backup) i host koristi iskljucivo izvore iz
-# role_timezone_ntp_servers.
-#
-# Ostavi false ako zelis da javni pool ostane kao rezerva.
-#
-role_timezone_chrony_disable_default_pools: false
+role_timezone_ntp_source_type: server
