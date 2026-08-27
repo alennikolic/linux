@@ -21,6 +21,15 @@
 #
 # APACHE VISE NIJE PODRZAN. Rola radi iskljucivo sa Nginx-om.
 #
+# ODNOS PREMA PAKETU:
+# Rola NE MENJA nijedan fajl koji dpkg prati. Vendorovi konfiguracioni
+# fajlovi (/etc/zabbix/nginx.conf i /etc/zabbix/php-fpm.conf) ostaju
+# netaknuti; rola samo uklanja simbolicne veze koje ih aktiviraju i
+# upisuje sopstvene fajlove pod sopstvenim imenima:
+#
+#   /etc/nginx/conf.d/zabbix-ansible.conf
+#   /etc/php/<verzija>/fpm/pool.d/zabbix-ansible.conf
+#
 # ZAVISNOST: uz automatsko pravljenje self-signed sertifikata potrebna
 # je kolekcija community.crypto:
 #
@@ -107,12 +116,25 @@ role_zabbix_web_listen_port: 8080
 # pretrazivac prijavljuje neslaganje imena. Ista vrednost se koristi
 # i kao podrazumevani CN self-signed sertifikata.
 #
+# Vise imena se razdvaja razmakom; tada CN prati PRVO ime, pa ostala
+# treba dodati u role_zabbix_web_tls_selfsigned_sans.
+#
 #   role_zabbix_web_hostname: "zabbix.example.com"
+#   role_zabbix_web_hostname: "zabbix.example.com zabbix 10.0.0.60"
 #
 role_zabbix_web_hostname: "_"
 
 # Adresa na kojoj web server slusa. Prazna vrednost znaci sve adrese.
 role_zabbix_web_listen_address: ""
+
+# Najveci zahtev koji Nginx prima. Nginx podrazumevano dozvoljava 1M,
+# sto je manje od post_max_size u PHP-u — uvoz veceg template fajla bi
+# vratio 413 pre nego sto PHP uopste vidi zahtev.
+#
+# Drzi ovu vrednost jednakom ili vecom od
+# role_zabbix_web_php_post_max_size.
+#
+role_zabbix_web_client_max_body_size: "16M"
 
 
 # =====================================================================
@@ -241,17 +263,66 @@ role_zabbix_web_hsts_max_age: 31536000
 # =====================================================================
 # PHP
 # =====================================================================
-# Zabbix 7.0 zahteva PHP 8.0 ili noviji. Vrednosti ispod su
-# minimalne koje Zabbix trazi — nize vrednosti frontend odbija.
+# Ove vrednosti rola upisuje kao php_value[] u SOPSTVENI PHP-FPM pool.
+# To je jedino mesto na kome one stvarno vaze: direktive php_value[]
+# iz pool-a imaju prednost nad php.ini i nad svime iz conf.d.
+#
+# Ranija verzija role ih je pisala u conf.d/99-zabbix.ini, gde ih je
+# vendorov pool pregazio i gde nikad nisu imale efekta. Rola sada taj
+# fajl uklanja.
+#
+# Vrednosti ispod su minimalne koje Zabbix zahteva — nize frontend
+# odbija uz poruku na ekranu.
 #
 role_zabbix_web_php_max_execution_time: 300
-role_zabbix_web_php_memory_limit: 128M
-role_zabbix_web_php_post_max_size: 16M
-role_zabbix_web_php_upload_max_filesize: 2M
+role_zabbix_web_php_memory_limit: "128M"
+role_zabbix_web_php_post_max_size: "16M"
+role_zabbix_web_php_upload_max_filesize: "2M"
 role_zabbix_web_php_max_input_time: 300
+
+# Broj promenljivih u jednom zahtevu. Zabbix trazi 10000 — sa manjim
+# brojem se veci obrasci (npr. masovna izmena stavki) tise odsecaju,
+# bez poruke o gresci.
+role_zabbix_web_php_max_input_vars: 10000
 
 # Vremenska zona PHP-a. Utice na prikaz vremena u frontendu.
 role_zabbix_web_php_timezone: Europe/Belgrade
+
+# Proizvoljne dodatne php_value[] direktive u pool-u.
+#
+#   role_zabbix_web_php_extra_values:
+#     opcache.memory_consumption: 256
+#     session.gc_maxlifetime: 3600
+#
+role_zabbix_web_php_extra_values: {}
+
+# ---------------------------------------------------------------------
+# PHP-FPM pool
+# ---------------------------------------------------------------------
+# Rola drzi sopstveni pool jer se PHP vrednosti iznad drugacije ne mogu
+# postaviti. Vrednosti ispod prate vendorove, pa je ponasanje isto kao
+# ranije dok ih ne promenis.
+#
+# dynamic  — stalno drzi nekoliko procesa, brzo odgovara (podrazumevano)
+# ondemand — pravi proces po potrebi, stedi memoriju, sporiji prvi
+#            zahtev posle mirovanja
+# static   — tacno pm.max_children procesa, uvek
+#
+role_zabbix_web_php_pm: dynamic
+
+# Gornja granica broja procesa. Svaki zauzima otprilike onoliko koliko
+# je memory_limit u najgorem slucaju, pa proizvod te dve vrednosti ne
+# sme premasiti raspolozivu memoriju hosta.
+role_zabbix_web_php_pm_max_children: 50
+
+# Vazi samo za pm: dynamic.
+role_zabbix_web_php_pm_start_servers: 5
+role_zabbix_web_php_pm_min_spare_servers: 5
+role_zabbix_web_php_pm_max_spare_servers: 35
+
+# Vazi samo za pm: ondemand. Posle ovog vremena mirovanja proces se
+# gasi.
+role_zabbix_web_php_pm_idle_timeout: "10s"
 
 
 # =====================================================================
