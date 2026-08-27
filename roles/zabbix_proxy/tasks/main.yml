@@ -7,10 +7,13 @@
 #   4. Include direktorijum i Include linija
 #   5. PSK kljuc (opciono)
 #   6. Drop-in konfiguracija
-#   7. Servis
+#   7. Primena konfiguracije (flush_handlers)
+#   8. Servis
 #
 # SQLite bazu proxy kreira sam pri prvom pokretanju - rola samo priprema
 # folder sa ispravnim vlasnikom.
+#
+# REDOSLED KORAKA 7 I 8 NIJE PROIZVOLJAN. Vidi komentar uz korak 7.
 
 - name: "Instalacija i konfiguracija Zabbix proxy-ja"
   when: role_zabbix_proxy_enabled | default(false) | bool
@@ -268,8 +271,37 @@
       notify: "Restartuj Zabbix proxy"
 
     # -----------------------------------------------------------------
-    # 7. Servis
+    # 7. Primena konfiguracije
     # -----------------------------------------------------------------
+    # OVAJ KORAK JE OBAVEZAN I MORA STAJATI PRE ZADATKA ZA SERVIS.
+    #
+    # Bez njega handler ostaje zakazan do kraja play-a, pa se izvrsava
+    # POSLE zadatka koji servis pokrece. Na svezem hostu to znaci:
+    #
+    #   1. zadatak "Servis zabbix-proxy" pokrene proxy
+    #   2. proxy pocne da pravi SQLite semu ("creating database ...")
+    #   3. handler odradi restart -> systemd ExecStop salje SIGTERM
+    #      usred kreiranja
+    #   4. proces se zaglavi u gasenju, systemd otkaze zakazani start
+    #      uz poruku "Job for zabbix-proxy.service canceled"
+    #
+    # Rezultat je polovicna baza i servis koji visi u stanju
+    # "deactivating (stop-sigterm)". Za rolu zabbix_server ili
+    # zabbix_agent ovaj redosled ne bi smetao, jer njihov prvi start ne
+    # radi nista dugotrajno. Proxy sa SQLite bazom je izuzetak.
+    #
+    # Sa flush_handlers restart se desava OVDE, sa vec upisanom
+    # konfiguracijom, i kreiranje baze tece neprekinuto do kraja.
+
+    - name: "Primena konfiguracije pre pokretanja servisa"
+      ansible.builtin.meta: flush_handlers
+
+    # -----------------------------------------------------------------
+    # 8. Servis
+    # -----------------------------------------------------------------
+    # Posle koraka 7 servis vec radi, pa ovaj zadatak samo osigurava da
+    # je omogucen pri podizanju sistema i da je stanje ono koje trazi
+    # role_zabbix_proxy_service_state.
 
     - name: "Servis {{ _zabbix_proxy_service }}"
       ansible.builtin.service:
