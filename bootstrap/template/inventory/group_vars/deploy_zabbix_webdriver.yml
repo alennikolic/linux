@@ -1,0 +1,5 @@
+---
+# inventory/group_vars/deploy_zabbix_webdriver.yml
+# Aktivira rolu zabbix_webdriver za sve hostove u grupi
+# [deploy_zabbix_webdriver].
+role_zabbix_webdriver_enabled: true
