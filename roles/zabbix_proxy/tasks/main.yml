@@ -7,13 +7,14 @@
 #   4. Include direktorijum i Include linija
 #   5. PSK kljuc (opciono)
 #   6. Drop-in konfiguracija
-#   7. Primena konfiguracije (flush_handlers)
-#   8. Servis
+#   7. Cekanje na kreiranje SQLite baze
+#   8. Primena konfiguracije (flush_handlers)
+#   9. Servis
 #
 # SQLite bazu proxy kreira sam pri prvom pokretanju - rola samo priprema
 # folder sa ispravnim vlasnikom.
 #
-# REDOSLED KORAKA 7 I 8 NIJE PROIZVOLJAN. Vidi komentar uz korak 7.
+# REDOSLED KORAKA 7, 8 I 9 NIJE PROIZVOLJAN. Vidi komentare uz njih.
 
 - name: "Instalacija i konfiguracija Zabbix proxy-ja"
   when: role_zabbix_proxy_enabled | default(false) | bool
@@ -119,6 +120,10 @@
     # -----------------------------------------------------------------
     # 2. Instalacija
     # -----------------------------------------------------------------
+    # PAZNJA: dpkg pokrece servis odmah po instalaciji paketa. Na svezem
+    # hostu proxy vec od ovog trenutka pocinje da pravi SQLite semu, sa
+    # konfiguracijom kakva je zatecena. To je razlog za korak 7.
+    #
     # Ako paket nije dostupan, gotovo uvek znaci da Zabbix repozitorijum
     # nije dodat. Originalna apt greska ostaje u ispisu, a rescue grana
     # dodaje objasnjenje sta proveriti.
@@ -181,9 +186,6 @@
     # Linija ide na SAM KRAJ fajla, jer Zabbix obradjuje Include tamo
     # gde ga procita: samo tako drop-in nadjacava vrednosti iz glavnog
     # fajla.
-    #
-    # Maska *.conf je bitna - bez nje bi Zabbix ucitavao i rezervne
-    # kopije i .dpkg-old fajlove iz istog direktorijuma.
 
     - name: "Kreiranje include direktorijuma"
       ansible.builtin.file:
@@ -204,10 +206,6 @@
       when: role_zabbix_proxy_manage_include | bool
       notify: "Restartuj Zabbix proxy"
 
-    # Kada korisnik sam odrzava Include liniju, rola proverava da ona
-    # zaista postoji. Bez te provere drop-in bi se upisao, servis bi se
-    # restartovao, sve bi izgledalo uspesno - a nijedna vrednost ne bi
-    # vazila.
     - name: "Provera postojece Include direktive"
       ansible.builtin.command:
         cmd: >-
@@ -235,8 +233,6 @@
     # -----------------------------------------------------------------
     # 5. PSK kljuc
     # -----------------------------------------------------------------
-    # Tajna ide u zaseban fajl sa dozvolama 0600, da bi drop-in mogao
-    # ostati citljiv i bez no_log.
 
     - name: "Upis PSK kljuca"
       ansible.builtin.copy:
@@ -252,9 +248,6 @@
     # -----------------------------------------------------------------
     # 6. Drop-in konfiguracija
     # -----------------------------------------------------------------
-    # Fajl ne sadrzi tajne - PSK je u zasebnom fajlu - pa moze imati
-    # dozvole 0644 i uobicajeni backup.
-    #
     # Rezervna kopija je ovde bezbedna zato sto Include koristi masku
     # *.conf: Ansible backup fajl se zavrsava tildom i ne odgovara
     # maski. U roli zabbix_agent to nije slucaj, pa je tamo backup
@@ -271,36 +264,94 @@
       notify: "Restartuj Zabbix proxy"
 
     # -----------------------------------------------------------------
-    # 7. Primena konfiguracije
+    # 7. Cekanje na kreiranje SQLite baze
     # -----------------------------------------------------------------
-    # OVAJ KORAK JE OBAVEZAN I MORA STAJATI PRE ZADATKA ZA SERVIS.
+    # OVAJ KORAK RESAVA NAJGORU ZAMKU OVE ROLE.
     #
-    # Bez njega handler ostaje zakazan do kraja play-a, pa se izvrsava
-    # POSLE zadatka koji servis pokrece. Na svezem hostu to znaci:
+    # dpkg pokrece servis odmah po instalaciji paketa, pa na svezem
+    # hostu proxy vec pravi SQLite semu dok rola upisuje konfiguraciju.
+    # Restart u tom trenutku znaci:
     #
-    #   1. zadatak "Servis zabbix-proxy" pokrene proxy
-    #   2. proxy pocne da pravi SQLite semu ("creating database ...")
-    #   3. handler odradi restart -> systemd ExecStop salje SIGTERM
-    #      usred kreiranja
-    #   4. proces se zaglavi u gasenju, systemd otkaze zakazani start
-    #      uz poruku "Job for zabbix-proxy.service canceled"
+    #   1. systemd ExecStop salje SIGTERM
+    #   2. proxy upise "Exiting ..." ali izlaznu tacku proverava tek
+    #      izmedju koraka posla; dok traje kreiranje seme te tacke nema
+    #   3. proces ostaje u "deactivating (stop-sigterm)" dok ne istekne
+    #      TimeoutStopSec
+    #   4. systemd otkaze zakazani start:
+    #      "Job for zabbix-proxy.service canceled"
     #
-    # Rezultat je polovicna baza i servis koji visi u stanju
-    # "deactivating (stop-sigterm)". Za rolu zabbix_server ili
-    # zabbix_agent ovaj redosled ne bi smetao, jer njihov prvi start ne
-    # radi nista dugotrajno. Proxy sa SQLite bazom je izuzetak.
+    # Ansible tada pada na handleru, a na disku ostaje polovicna baza.
     #
-    # Sa flush_handlers restart se desava OVDE, sa vec upisanom
-    # konfiguracijom, i kreiranje baze tece neprekinuto do kraja.
+    # Zato rola pre bilo kakvog restarta saceka da fajl baze prestane da
+    # raste. Provera je namerno nezavisna od Zabbix-a: gleda samo
+    # velicinu fajla, pa radi bez obzira na verziju i tekst u logu.
+    #
+    # Ako servis uopste ne radi, cekanja nema - nista se ne pravi, a
+    # korak 8 ce ga pokrenuti.
+
+    - name: "Cekanje da proxy zavrsi kreiranje SQLite baze"
+      ansible.builtin.shell:
+        cmd: |
+          set -u
+          DB="{{ role_zabbix_proxy_db_name }}"
+          TIMEOUT={{ _zabbix_proxy_db_init_timeout }}
+
+          # Servis ne radi -> niko ne pravi bazu, nema sta da se ceka.
+          if ! systemctl is-active --quiet {{ _zabbix_proxy_service }}; then
+            echo "servis ne radi, preskacem cekanje"
+            exit 0
+          fi
+
+          prev=-1
+          elapsed=0
+          while [ "$elapsed" -lt "$TIMEOUT" ]; do
+            cur=$(stat -c %s "$DB" 2>/dev/null || echo 0)
+            # Dva uzastopna jednaka ocitavanja znace da je upis stao.
+            if [ "$cur" -gt 0 ] && [ "$cur" = "$prev" ]; then
+              echo "baza je kreirana, velicina ${cur} bajtova"
+              exit 0
+            fi
+            prev="$cur"
+            sleep 3
+            elapsed=$((elapsed + 3))
+          done
+
+          echo "istekao timeout od ${TIMEOUT}s" >&2
+          exit 1
+        executable: /bin/sh
+      register: _zabbix_proxy_db_wait
+      changed_when: false
+      failed_when: false
+
+    - name: "Provera ishoda kreiranja baze"
+      ansible.builtin.assert:
+        that:
+          - _zabbix_proxy_db_wait.rc == 0
+        fail_msg: >-
+          Proxy nije zavrsio kreiranje SQLite baze
+          "{{ role_zabbix_proxy_db_name }}" u
+          {{ _zabbix_proxy_db_init_timeout }} sekundi. Rola je stala
+          pre restarta, da polovicna baza ne bi bila ostecena.
+          Pogledaj /var/log/zabbix/zabbix_proxy.log - najcesci uzroci
+          su nedostupan folder baze, zaostala ostecena baza iz ranijeg
+          prekinutog pokretanja, ili neispravan parametar iz
+          role_zabbix_proxy_config.
+        quiet: true
+
+    # -----------------------------------------------------------------
+    # 8. Primena konfiguracije
+    # -----------------------------------------------------------------
+    # Handler se izvrsava OVDE, a ne na kraju play-a. Baza je do ovog
+    # trenutka gotova, pa je restart bezbedan.
 
     - name: "Primena konfiguracije pre pokretanja servisa"
       ansible.builtin.meta: flush_handlers
 
     # -----------------------------------------------------------------
-    # 8. Servis
+    # 9. Servis
     # -----------------------------------------------------------------
-    # Posle koraka 7 servis vec radi, pa ovaj zadatak samo osigurava da
-    # je omogucen pri podizanju sistema i da je stanje ono koje trazi
+    # Posle koraka 8 servis vec radi; ovaj zadatak samo osigurava da je
+    # omogucen pri podizanju sistema i da je stanje ono koje trazi
     # role_zabbix_proxy_service_state.
 
     - name: "Servis {{ _zabbix_proxy_service }}"
