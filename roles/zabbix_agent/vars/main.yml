@@ -73,3 +73,8 @@ _zabbix_agent_server_active_value: |-
 # Zabbix takav zapis ili odbija ili tiho preskace - ni jedno ni drugo se ne
 # vidi bez citanja logova.
 _zabbix_agent_address_flaw_re: '(^\s*[,;])|([,;]\s*[,;])|([,;]\s*$)'
+
+
+# TLS se ukljucuje samim postojanjem PSK vrednosti - nema zasebnog prekidaca
+# koji bi mogao da se raziđe sa stvarnim stanjem.
+_zabbix_agent_tls_enabled: "{{ (role_zabbix_agent_tls_psk | default('') | string | length) > 0 }}"
