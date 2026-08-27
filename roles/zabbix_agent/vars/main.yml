@@ -1,23 +1,43 @@
 ---
 # roles/zabbix_agent/vars/main.yml
 #
-# Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
-# group_vars ili host_vars.
-#
-# Putanje se razlikuju izmedju zabbix-agent i zabbix-agent2, pa se
-# izvode iz imena paketa umesto da se zadaju rucno.
+# Izvedene vrednosti. NISU javni interfejs role - ne postavljaj ih u
+# group_vars ili host_vars. Prefiks donje crte je znak upozorenja.
 
-# zabbix-agent   → /etc/zabbix/zabbix_agentd.conf
-# zabbix-agent2  → /etc/zabbix/zabbix_agent2.conf
-_zabbix_agent_config_file: >-
+# Ime paketa i servisa se poklapaju kod obe varijante.
+_zabbix_agent_package: "{{ 'zabbix-agent2' if role_zabbix_agent_variant == 'agent2' else 'zabbix-agent' }}"
+_zabbix_agent_service: "{{ _zabbix_agent_package }}"
+
+# Glavna konfiguracija koju rola SAMO CITA (radi otkrivanja Include putanje).
+_zabbix_agent_main_conf: >-
   {{ '/etc/zabbix/zabbix_agent2.conf'
-     if role_zabbix_agent_package == 'zabbix-agent2'
+     if role_zabbix_agent_variant == 'agent2'
      else '/etc/zabbix/zabbix_agentd.conf' }}
 
-_zabbix_agent_include_dir: >-
-  {{ '/etc/zabbix/zabbix_agent2.d'
-     if role_zabbix_agent_package == 'zabbix-agent2'
-     else '/etc/zabbix/zabbix_agentd.d' }}
+# Kljucevi koje rola ispisuje sama. Ako bi se nasli i u recniku, u fajlu bi
+# se pojavili dvaput, a dupliran parametar u istom fajlu nema definisano
+# ponasanje.
+_zabbix_agent_reserved_keys:
+  - Server
+  - ServerActive
+  - Hostname
+  - TLSConnect
+  - TLSAccept
+  - TLSPSKIdentity
+  - TLSPSKFile
 
-# Ime servisa se poklapa sa imenom paketa.
-_zabbix_agent_service: "{{ role_zabbix_agent_package }}"
+# Server i ServerActive prihvataju i string i listu; Zabbix ocekuje jednu
+# liniju sa vrednostima razdvojenim zarezom.
+_zabbix_agent_server_value: >-
+  {{ role_zabbix_agent_server | join(',')
+     if (role_zabbix_agent_server is sequence and role_zabbix_agent_server is not string)
+     else role_zabbix_agent_server }}
+
+_zabbix_agent_server_active_value: >-
+  {{ role_zabbix_agent_server_active | join(',')
+     if (role_zabbix_agent_server_active is sequence and role_zabbix_agent_server_active is not string)
+     else role_zabbix_agent_server_active }}
+
+# TLS se ukljucuje samim postojanjem PSK vrednosti - nema zasebnog prekidaca
+# koji bi mogao da se raziđe sa stvarnim stanjem.
+_zabbix_agent_tls_enabled: "{{ (role_zabbix_agent_tls_psk | default('') | string | length) > 0 }}"
