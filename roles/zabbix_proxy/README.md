@@ -1,18 +1,54 @@
-# Rola: zabbix_proxy
+<!-- roles/zabbix_proxy/README.md -->
 
-Instalira i konfiguriše Zabbix proxy na Debian/Ubuntu sistemima.
+# Rola: `zabbix_proxy`
 
-Proxy prikuplja podatke sa hostova u svojoj mreži i prosleđuje ih Zabbix serveru. Koristi se za udaljene lokacije, mreže iza NAT-a i za rasterećenje servera.
+Instalira i konfiguriše Zabbix proxy sa **SQLite** bazom na Debian/Ubuntu
+sistemima. Konfiguracija se upisuje kao **drop-in fajl** u
+`/etc/zabbix/zabbix_proxy.d/`; glavni `zabbix_proxy.conf` ostaje fabrički.
+
+Proxy prikuplja podatke sa hostova u svojoj mreži i prosleđuje ih Zabbix
+serveru. Koristi se za udaljene lokacije, mreže iza NAT-a i za rasterećenje
+servera.
 
 ---
 
-## Razlika u odnosu na `zabbix_server`
+## Samo SQLite
 
-**Proxy podrazumevano koristi SQLite** — lokalnu bazu koju sam kreira pri prvom pokretanju. Nije potrebna rola `zabbix_db`, nema uvoza šeme, nema lozinki.
+MySQL i PostgreSQL backend su namerno izbačeni. Tražili bi pripremljenu bazu,
+uvoz šeme i lozinke — posao koji radi rola `zabbix_db` i koji za proxy retko
+ima smisla.
 
-To čini ovu rolu znatno jednostavnijom za primenu: dovoljno je zadati adresu servera.
+SQLite bazu proxy kreira sam pri prvom pokretanju. Rola samo priprema folder
+sa ispravnim vlasnikom. Nema šeme, nema lozinki, nema zavisnosti od druge
+role.
 
-MySQL backend postoji kao opcija za proxy koji opslužuje veliki broj hostova.
+Praktična granica je nekoliko stotina hostova po proxy-ju. Iznad toga upis u
+SQLite postaje usko grlo — tada je ispravno rešenje **još jedan proxy**, ne
+prelazak na MySQL.
+
+---
+
+## Zašto drop-in
+
+`zabbix_proxy.conf` ima preko hiljadu linija i dpkg ga tretira kao *conffile*.
+Rola koja ga prepisuje u celosti pravi konflikt pri svakoj nadogradnji paketa,
+a parametri koje Zabbix uvede ili ukloni u novom izdanju nikada ne stignu na
+sistem.
+
+### Include linija
+
+Kao i kod servera, paket proxy-ja **nema aktivnu `Include` direktivu** — sve su
+zakomentarisane, sa upstream putanjom `/usr/local/etc/`. Rola zato na sam kraj
+glavnog fajla dodaje blok:
+
+```text
+# BEGIN UPRAVLJA ANSIBLE ROLA: zabbix_proxy
+Include=/etc/zabbix/zabbix_proxy.d/*.conf
+# END UPRAVLJA ANSIBLE ROLA: zabbix_proxy
+```
+
+Pozicija na kraju nije kozmetička: Zabbix obrađuje `Include` u trenutku kada
+ga pročita, pa samo tako drop-in nadjačava vrednosti iz glavnog fajla.
 
 ---
 
@@ -24,9 +60,13 @@ MySQL backend postoji kao opcija za proxy koji opslužuje veliki broj hostova.
 | Mrežni pristup do servera | rola `firewall` |
 | **Proxy dodat u Zabbix serveru** | ručno, kroz frontend |
 
-> **Poslednja stavka nije opciona.** Proxy mora biti upisan u Zabbix serveru pod `Administration → Proxies`, sa **tačno istim imenom** kao `role_zabbix_proxy_hostname` i **istim režimom rada**. Bez toga server odbija podatke, a u logu proxy-ja se pojavljuje poruka o nepoznatom proxy-ju.
+> **Poslednja stavka nije opciona.** Proxy mora biti upisan u Zabbix serveru
+> pod `Administration → Proxies`, sa **tačno istim imenom** kao
+> `role_zabbix_proxy_hostname` i **istim režimom rada**. Bez toga server odbija
+> podatke, a u logu proxy-ja se pojavljuje poruka o nepoznatom proxy-ju.
 >
-> To se može automatizovati kroz rolu `zabbix_provisioning`, koja radi preko Zabbix API-ja.
+> To se može automatizovati kroz rolu `zabbix_provisioning`, koja radi preko
+> Zabbix API-ja.
 
 ---
 
@@ -38,7 +78,10 @@ MySQL backend postoji kao opcija za proxy koji opslužuje veliki broj hostova.
 srv-proxy-ns-01
 ```
 
-Grupi pripada `group_vars/deploy_zabbix_proxy.yml`, koji postavlja `role_zabbix_proxy_enabled: true`.
+```yaml
+# group_vars/deploy_zabbix_proxy.yml
+role_zabbix_proxy_enabled: true
+```
 
 ---
 
@@ -49,7 +92,7 @@ Grupi pripada `group_vars/deploy_zabbix_proxy.yml`, koji postavlja `role_zabbix_
 role_zabbix_proxy_server: "10.0.0.50"
 ```
 
-To je sve za osnovnu postavku sa SQLite bazom. Ime proxy-ja se izvodi iz `inventory_hostname`.
+To je sve za osnovnu postavku. Ime proxy-ja se izvodi iz `inventory_hostname`.
 
 ---
 
@@ -60,204 +103,161 @@ To je sve za osnovnu postavku sa SQLite bazom. Ime proxy-ja se izvodi iz `invent
 | Aktivan | `0` (podrazumevano) | Proxy zove server |
 | Pasivan | `1` | Server zove proxy |
 
-**Aktivan režim je uobičajen.** Proxy je često iza NAT-a ili zaštitnog zida udaljene lokacije, pa je jednostavnije da on otvara vezu ka serveru. Tada proxy ne prima dolazne veze i ne treba mu otvoren port.
+**Aktivan režim je uobičajen.** Proxy je često iza NAT-a ili zaštitnog zida
+udaljene lokacije, pa je jednostavnije da on otvara vezu. Tada proxy ne prima
+dolazne veze i ne treba mu otvoren port.
 
-**Pasivan režim** koristi kada server mora da kontroliše trenutak komunikacije. Tada proxy sluša na portu 10051 i server mora moći da dođe do njega.
+**Pasivan režim** koristi kada server mora da kontroliše trenutak
+komunikacije. Tada proxy sluša na portu 10051 i server mora moći da dođe do
+njega.
 
-> Režim se mora poklapati sa podešavanjem u Zabbix serveru. Neusklađen režim znači da komunikacije nema — **bez jasne greške**, samo tišina.
+> Režim se mora poklapati sa podešavanjem u Zabbix serveru. Neusklađen režim
+> znači da komunikacije nema — **bez jasne greške**, samo tišina.
 
 ---
 
 ## Varijable
 
-### Aktivacija i backend
+### Aktivacija i paket
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_proxy_enabled` | `false` | Kada je `false`, rola ne dira ništa. |
-| `role_zabbix_proxy_db_backend` | `sqlite3` | `sqlite3`, `mysql`, `pgsql`. |
-| `role_zabbix_proxy_version` | `""` | Zakovana verzija. Prazno = najnovija. |
+| `role_zabbix_proxy_enabled` | `false` | Prekidač role |
+| `role_zabbix_proxy_version` | `""` | Zakovana verzija; prazno = najnovija |
 
 ### Identitet i veza
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_proxy_hostname` | `{{ inventory_hostname }}` | **Mora se poklapati sa imenom u serveru.** |
-| `role_zabbix_proxy_server` | `""` | **Obavezno.** Adresa Zabbix servera. |
-| `role_zabbix_proxy_mode` | `0` | `0` aktivan, `1` pasivan. |
-
-### Mreža
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_zabbix_proxy_listen_port` | `10051` | Port. Koristi se u pasivnom režimu. |
-| `role_zabbix_proxy_listen_ip` | `""` | Prazno = sve adrese. |
-| `role_zabbix_proxy_stats_allowed_ip` | `127.0.0.1` | Ko sme čitati interne statistike. |
+| `role_zabbix_proxy_hostname` | `{{ inventory_hostname }}` | **Mora se poklapati sa imenom u serveru** |
+| `role_zabbix_proxy_server` | `""` | **Obavezno.** Adresa servera; string ili lista |
+| `role_zabbix_proxy_mode` | `0` | `0` aktivan, `1` pasivan |
 
 ### Baza
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_proxy_db_name` | `/var/lib/zabbix/zabbix_proxy.sqlite3` | Putanja fajla ili ime baze. |
-| `role_zabbix_proxy_db_host` | `localhost` | Samo za mysql/pgsql. |
-| `role_zabbix_proxy_db_port` | `3306` | Samo za mysql/pgsql. |
-| `role_zabbix_proxy_db_user` | `zabbix` | Samo za mysql/pgsql. |
-| `role_zabbix_proxy_db_password` | `""` | Obavezno za mysql/pgsql. |
+| `role_zabbix_proxy_db_name` | `/var/lib/zabbix/zabbix_proxy.sqlite3` | Puna putanja SQLite fajla |
 
-### Čuvanje i slanje podataka
+### Konfiguracija
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_proxy_offline_buffer` | `1` | Sati čuvanja neposlatih podataka. |
-| `role_zabbix_proxy_local_buffer` | `0` | Sati čuvanja posle slanja. |
-| `role_zabbix_proxy_data_sender_frequency` | `1` | Sekunde između slanja. |
-| `role_zabbix_proxy_config_frequency` | `10` | Sekunde između preuzimanja konfiguracije. |
-
-### Logovanje i procesi
-
-| Varijabla | Podrazumevano |
-|---|---|
-| `role_zabbix_proxy_logfile` | `/var/log/zabbix/zabbix_proxy.log` |
-| `role_zabbix_proxy_logfile_size` | `10` |
-| `role_zabbix_proxy_debug_level` | `3` |
-| `role_zabbix_proxy_start_pollers` | `5` |
-| `role_zabbix_proxy_start_pollers_unreachable` | `1` |
-| `role_zabbix_proxy_start_trappers` | `5` |
-| `role_zabbix_proxy_start_pingers` | `1` |
-| `role_zabbix_proxy_start_discoverers` | `1` |
-| `role_zabbix_proxy_start_http_pollers` | `1` |
-| `role_zabbix_proxy_start_preprocessors` | `3` |
-
-### Keševi i putanje
-
-| Varijabla | Podrazumevano |
-|---|---|
-| `role_zabbix_proxy_cache_size` | `32M` |
-| `role_zabbix_proxy_history_cache_size` | `16M` |
-| `role_zabbix_proxy_history_index_cache_size` | `4M` |
-| `role_zabbix_proxy_external_scripts` | `/usr/lib/zabbix/externalscripts` |
-| `role_zabbix_proxy_fping_location` | `/usr/bin/fping` |
-| `role_zabbix_proxy_timeout` | `4` |
+| `role_zabbix_proxy_config` | `{}` | Slobodan rečnik svih ostalih parametara |
+| `role_zabbix_proxy_extra_config` | `""` | Doslovan tekst na kraju fajla |
 
 ### TLS
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_proxy_tls_connect` | `unencrypted` | `unencrypted`, `psk`, `cert`. |
-| `role_zabbix_proxy_tls_accept` | `unencrypted` | Isto. |
-| `role_zabbix_proxy_tls_psk_identity` | `""` | Identitet PSK ključa. |
-| `role_zabbix_proxy_tls_psk` | `""` | **Tajna** — ide u vault. |
-| `role_zabbix_proxy_tls_psk_file` | `/etc/zabbix/zabbix_proxy.psk` | Gde se upisuje. |
+| `role_zabbix_proxy_tls_psk` | `""` | PSK heksadecimalno; prazno = bez TLS-a |
+| `role_zabbix_proxy_tls_psk_identity` | `PSK {{ inventory_hostname }}` | Identitet PSK-a |
+| `role_zabbix_proxy_tls_psk_file` | `/etc/zabbix/zabbix_proxy.psk` | Putanja PSK fajla |
 
-### Ostalo
+### Drop-in mehanizam
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
-| `role_zabbix_proxy_extra_config` | `""` | Proizvoljne linije. |
-| `role_zabbix_proxy_service_enabled` | `true` | Startuje uz sistem. |
-| `role_zabbix_proxy_service_state` | `started` | `started`, `stopped`. |
+| `role_zabbix_proxy_include_dir` | `/etc/zabbix/zabbix_proxy.d` | Direktorijum drop-ina |
+| `role_zabbix_proxy_dropin_name` | `zz-ansible.conf` | Ime drop-in fajla |
+| `role_zabbix_proxy_manage_include` | `true` | Rola sama dodaje `Include` liniju |
+
+### Servis
+
+| Varijabla | Podrazumevano | Opis |
+|---|---|---|
+| `role_zabbix_proxy_service_enabled` | `true` | Servis omogućen pri podizanju |
+| `role_zabbix_proxy_service_state` | `started` | Ciljno stanje servisa |
+
+Ključevi `Hostname`, `Server`, `ProxyMode`, `DBName`, `TLS*` i `Include` su
+rezervisani i ne smeju se pojaviti u `role_zabbix_proxy_config` — `assert`
+prekida izvršavanje.
 
 ---
 
 ## Primeri
 
-### Osnovna postavka, aktivan režim
+Minimalno, aktivni režim:
 
 ```yaml
-# host_vars/srv-proxy-ns-01.yml
 role_zabbix_proxy_server: "10.0.0.50"
 ```
 
-Proxy sam otvara vezu ka serveru. Nije potrebno otvarati port na proxy strani.
-
-Na serverskoj strani mora biti dozvoljen dolazni saobraćaj:
+Pasivni režim, server sam zove proxy:
 
 ```yaml
-# host_vars/srv-mon-01.yml
-role_firewall_rules:
-  - { rule: allow, port: 10051, proto: tcp, from: "10.10.0.0/16", comment: "Proxy -> server" }
-```
-
-### Pasivan režim
-
-```yaml
-# host_vars/srv-proxy-ns-01.yml
 role_zabbix_proxy_server: "10.0.0.50"
 role_zabbix_proxy_mode: 1
-
-role_firewall_rules:
-  - { rule: allow, port: 10051, proto: tcp, from: "10.0.0.50", comment: "Server -> proxy" }
+role_zabbix_proxy_config:
+  ListenPort: 10051
 ```
 
-Ne zaboravi da isti režim podesiš i u Zabbix serveru.
-
-### Duži bafer za nepouzdanu vezu
+HA klaster servera — čvorovi se razdvajaju **tačkom-zarezom**:
 
 ```yaml
-role_zabbix_proxy_offline_buffer: 24
+role_zabbix_proxy_server: "zbx-node1;zbx-node2"
 ```
 
-Proxy tada čuva podatke 24 sata ako je veza ka serveru prekinuta. Korisno za udaljene lokacije sa nestabilnom vezom. Cena je prostor na disku i veće opterećenje SQLite baze.
-
-### MySQL backend za veliki proxy
+Udaljena lokacija sa nepouzdanom vezom — duži bafer:
 
 ```yaml
-role_zabbix_proxy_db_backend: mysql
-role_zabbix_proxy_db_name: zabbix_proxy
-role_zabbix_proxy_db_host: localhost
-role_zabbix_proxy_db_user: zabbix
-role_zabbix_proxy_db_password: !vault |
-  $ANSIBLE_VAULT;1.1;AES256
-  62313436...
+role_zabbix_proxy_server: "10.0.0.50"
+role_zabbix_proxy_config:
+  ProxyOfflineBuffer: 24
+  CacheSize: 64M
+  HistoryCacheSize: 32M
+  StartPollers: 15
+  Timeout: 10
 ```
 
-> Uz MySQL backend rola **ne kreira bazu niti uvozi šemu**. To moraš uraditi ručno, ili rolom `zabbix_db` uz prilagođeno ime baze. Šema je u `/usr/share/zabbix-sql-scripts/mysql/proxy.sql.gz`.
-
-### Šifrovana veza preko PSK
-
-```bash
-openssl rand -hex 32
-ansible-vault encrypt_string '<psk_hex>' --name 'role_zabbix_proxy_tls_psk'
-```
+Šifrovana veza ka serveru:
 
 ```yaml
-role_zabbix_proxy_tls_connect: psk
-role_zabbix_proxy_tls_accept: psk
-role_zabbix_proxy_tls_psk_identity: "PSK-proxy-ns"
-role_zabbix_proxy_tls_psk: !vault |
-  $ANSIBLE_VAULT;1.1;AES256
-  38396264...
+role_zabbix_proxy_server: "10.0.0.50"
+role_zabbix_proxy_tls_psk: "{{ vault_proxy_psk }}"
+role_zabbix_proxy_tls_psk_identity: "PSK srv-proxy-ns-01"
 ```
 
-Isti identitet i ključ upiši i u Zabbix serveru, u podešavanjima proxy-ja.
-
-### Agenti koji šalju podatke proxy-ju
-
-Na hostovima iza proxy-ja, umesto adrese servera zadaj adresu proxy-ja:
-
-```yaml
-# group_vars/lokacija_ns.yml
-role_zabbix_agent_server: "10.10.0.5"
-role_zabbix_agent_server_active: "10.10.0.5"
-```
+Isti identitet i ključ moraju biti upisani i u podešavanjima ovog proxy-ja u
+Zabbix serveru.
 
 ---
 
-## Napomene
+## Zamke
 
-**SQLite bazu proxy kreira sam.** Rola priprema samo folder sa vlasnikom `zabbix`. Fajl nastaje pri prvom pokretanju servisa i tada se u log upisuje poruka o kreiranju baze. Ako fajl obrišeš, proxy će ga napraviti ponovo — uz gubitak neposlatih podataka.
+**Proxy mora biti dodat u serveru.** Ime i režim moraju se poklapati tačno.
+Neusklađenost ne daje jasnu grešku — podaci jednostavno ne stižu.
 
-**Ime proxy-ja je kritično.** Mora se poklapati sa imenom u Zabbix serveru, karakter po karakter. Podrazumevana vrednost `{{ inventory_hostname }}` znači da je ime iz `hosts.ini` merodavno — upiši u server tačno to.
+**Nadogradnja paketa može ukloniti `Include` liniju.** Ako pri `apt upgrade`
+odabereš „install the package maintainer's version", blok sa `Include`
+nestaje i konfiguracija prestaje da važi. Proxy tada startuje sa fabričkim
+vrednostima (`Server=127.0.0.1`) i tiho ne radi ništa korisno. Preporuka: na
+upit odgovori `N`, pa pusti rolu.
 
-**Neusklađen režim ne prijavljuje grešku.** Ako je proxy aktivan a u serveru je upisan kao pasivan, podataka prosto nema. Proveri obe strane pre nego što tražiš uzrok drugde.
+**Vlasništvo nad folderom SQLite baze.** Nije dovoljno da fajl bude upisiv —
+SQLite pored baze pravi `-journal` i `-wal` fajlove, pa upis mora biti
+dozvoljen nad folderom.
 
-**`fping` se instalira zasebno.** Nije zavisnost Zabbix paketa, a bez njega ICMP provere ne rade.
+**Rola ne kreira SQLite fajl.** Prazan fajl bi proxy protumačio kao oštećenu
+bazu. Fajl nastaje pri prvom pokretanju servisa, sa punom šemom.
 
-**Proxy ne čuva istoriju.** Podaci se brišu čim ih server potvrdi, osim ako povećaš `role_zabbix_proxy_local_buffer`. Istorija živi na serveru.
+**Parametri se menjaju između Zabbix izdanja.** Rečnik znači da rola ne mora
+da zna koji parametar postoji u kojoj verziji — ali i da za ispravnost
+odgovaraš ti. Neispravan parametar sprečava pokretanje; log kaže koji.
 
-**Konfiguracioni fajl može sadržati lozinku** (uz MySQL backend), pa ima dozvole `0640` i grupu `zabbix`. Task ima `no_log: true`, što znači da `--diff` neće prikazati razliku u tom fajlu.
+**Boolean vrednosti.** `true`/`false` iz YAML-a Jinja ispisuje kao
+`True`/`False`, što Zabbix ne razume. Koristi `0` i `1`.
 
-**Idempotentnost.** Rola je idempotentna. Ponovljeno pokretanje prijavljuje `ok` i ne restartuje servis, osim kada se paket ili konfiguracija zaista promene.
+**Prelazak sa stare verzije role.** Proksiji koji su već dobili potpuno
+prepisan `zabbix_proxy.conf` neće biti vraćeni na fabrički automatski:
+
+```bash
+apt-get install --reinstall -o Dpkg::Options::="--force-confask,confnew" \
+  zabbix-proxy-sqlite3
+```
+
+Ako si ranije koristio MySQL backend, prelazak na SQLite znači i **novu praznu
+bazu** — podaci koje proxy još nije poslao serveru se gube.
 
 ---
 
@@ -265,66 +265,68 @@ role_zabbix_agent_server_active: "10.10.0.5"
 
 ```text
 roles/zabbix_proxy/
-├── README.md
-├── defaults/
-│   └── main.yml
-├── vars/
-│   └── main.yml
-├── handlers/
-│   └── main.yml
-├── tasks/
-│   └── main.yml
-└── templates/
-    └── zabbix_proxy.conf.j2
+├── defaults/main.yml
+├── handlers/main.yml
+├── tasks/main.yml
+├── templates/dropin.conf.j2
+├── vars/main.yml
+└── README.md
 ```
+
+---
+
+## Idempotentnost
+
+Sve izmene idu kroz `apt`, `file`, `blockinfile`, `copy`, `template` i
+`service`. `grep` provera ima `changed_when: false`. Drugi prolaz bez izmene
+varijabli ne prijavljuje nijednu promenu i ne pokreće handler.
 
 ---
 
 ## Provera
 
 ```bash
-# Bez izmena
-./apply.sh --limit deploy_zabbix_proxy --check --diff
+# Include linija na kraju glavnog fajla
+tail -5 /etc/zabbix/zabbix_proxy.conf
 
-# Primena
-./apply.sh --limit srv-proxy-ns-01
+# šta je rola upisala
+cat /etc/zabbix/zabbix_proxy.d/zz-ansible.conf
 
-# Stanje servisa
-ansible srv-proxy-ns-01 -m command -a "systemctl status zabbix-proxy"
+# SQLite baza — nastaje pri prvom pokretanju
+ls -alh /var/lib/zabbix/
 
-# Log — trazi "Zabbix Proxy started"
-ansible srv-proxy-ns-01 -m command -a "tail -30 /var/log/zabbix/zabbix_proxy.log"
+# stanje servisa i poslednje greške
+systemctl status zabbix-proxy
+tail -50 /var/log/zabbix/zabbix_proxy.log
 
-# Da li je SQLite baza kreirana
-ansible srv-proxy-ns-01 -m command -a "ls -lh /var/lib/zabbix/"
-
-# Da li proxy slusa (pasivan rezim)
-ansible srv-proxy-ns-01 -m command -a "ss -lntp sport = :10051"
+# potvrda da server prihvata proxy
+grep -Ei 'proxy|connect' /var/log/zabbix/zabbix_proxy.log | tail -20
 ```
 
-U frontendu, pod `Administration → Proxies`, kolona `Last seen` pokazuje kada se proxy poslednji put javio. Ako stoji `Never`, komunikacija ne radi.
+Na strani servera, u logu, proxy koji nije registrovan javlja se kao odbijena
+veza sa nepoznatim imenom.
 
 ---
 
 ## Rešavanje problema
 
-**`Proxy "ime" not found` u logu proxy-ja**
+**`cannot parse list of active checks` / podaci ne stižu.** Ime proxy-ja se ne
+poklapa sa imenom u serveru, ili se režim rada razlikuje.
 
-Proxy nije dodat u Zabbix serveru, ili se ime razlikuje. Uporedi `Hostname` iz konfiguracije sa imenom u frontendu.
+**Proxy startuje pa se odmah gasi.** Pogledaj
+`/var/log/zabbix/zabbix_proxy.log` — najčešće je neispravan parametar iz
+`role_zabbix_proxy_config` ili nedostupan folder SQLite baze.
 
-**`Last seen: Never` u frontendu**
+**`database is locked` ili spor upis.** SQLite je dostigao granicu za broj
+hostova koje proxy opslužuje. Podeli hostove na još jedan proxy.
 
-Najčešće neusklađen režim rada, ili zaštitni zid. Proveri:
+**Konfiguracija se ne primenjuje.** Proveri da `Include` linija stoji na kraju
+glavnog fajla:
 
 ```bash
-# Sa proxy-ja, da li server odgovara (aktivan rezim)
-nc -zv 10.0.0.50 10051
+grep -n '^Include' /etc/zabbix/zabbix_proxy.conf
+wc -l /etc/zabbix/zabbix_proxy.conf
 ```
 
-**Proxy radi ali hostovi nemaju podatke**
-
-Hostovi u Zabbix-u moraju biti dodeljeni proxy-ju — u podešavanjima hosta, polje `Monitored by proxy`. Sama instalacija proxy-ja ne prebacuje hostove na njega.
-
-**Baza raste bez kontrole**
-
-`role_zabbix_proxy_offline_buffer` je previsok, a veza ka serveru prekinuta. Proveri da li server prima podatke; SQLite fajl će se smanjiti tek posle uspešnog slanja.
+**Veza ka serveru odbijena uz PSK.** Identitet ili ključ se ne poklapaju sa
+onim što je upisano u podešavanjima proxy-ja u Zabbix serveru.
