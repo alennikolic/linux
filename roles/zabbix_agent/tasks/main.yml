@@ -1,164 +1,261 @@
 ---
 # roles/zabbix_agent/tasks/main.yml
-#
-# Instalira Zabbix agenta i upisuje konfiguraciju:
-#   1. Provere
-#   2. Instalacija paketa
-#   3. PSK kljuc (opciono)
-#   4. Konfiguracioni fajl
-#   5. Servis
-#
-# Uslovi nad varijablama iz defaults/main.yml namerno koriste
-# default() filter. Ansible nedefinisanu varijablu u "when" ili
-# "that" izrazu ne tretira kao netacnu — prekida rad. Bez filtera
-# nepotpun defaults/main.yml rusi rolu usred izvrsavanja, umesto da
-# se ponasa kao da opcija nije podesena.
 
-- name: "Instalacija i konfiguracija Zabbix agenta"
+- name: Zabbix agent
+  when: role_zabbix_agent_enabled | default(false) | bool
   block:
 
-    # -----------------------------------------------------------------
-    # 1. Provere
-    # -----------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Provere pre bilo kakve izmene sistema
+    # -----------------------------------------------------------------------
 
-    - name: "Provera da je distribucija podrzana"
+    - name: Provera - podrzana distribucija
       ansible.builtin.assert:
         that:
-          - ansible_os_family == 'Debian'
+          - ansible_facts['os_family'] == 'Debian'
         fail_msg: >-
-          Rola "zabbix_agent" trenutno podrzava iskljucivo
-          Debian/Ubuntu, a ovaj host je
-          {{ ansible_os_family | default('nepoznat') }}.
-        success_msg: "Distribucija je podrzana."
+          Rola zabbix_agent podrzava samo Debian/Ubuntu sisteme.
+          Detektovano: {{ ansible_facts['distribution'] }}
+          {{ ansible_facts['distribution_version'] }}
+        quiet: true
 
-    - name: "Provera da je adresa servera zadata"
+    - name: Provera - ispravna varijanta agenta
       ansible.builtin.assert:
         that:
-          - role_zabbix_agent_server | default('') | length > 0
+          - role_zabbix_agent_variant in ['agent', 'agent2']
         fail_msg: >-
-          role_zabbix_agent_server nije popunjen. Upisi adresu Zabbix
-          servera ili proxy-ja u group_vars/all.yml pre pokretanja.
-          Bez toga bi agent bio instaliran ali ne bi imao kome da se
-          javi.
-        success_msg: "Adresa servera je zadata."
+          role_zabbix_agent_variant mora biti "agent" ili "agent2",
+          a dobijeno je "{{ role_zabbix_agent_variant }}".
+        quiet: true
 
-    - name: "Provera izbora agenta"
+    - name: Provera - definisan bar jedan Zabbix server
       ansible.builtin.assert:
         that:
-          - role_zabbix_agent_package | default('') in ['zabbix-agent', 'zabbix-agent2']
+          - (_zabbix_agent_server_value | length > 0) or
+            (_zabbix_agent_server_active_value | length > 0)
         fail_msg: >-
-          role_zabbix_agent_package mora biti "zabbix-agent" ili
-          "zabbix-agent2", a zadato je
-          "{{ role_zabbix_agent_package | default('prazno') }}".
-        success_msg: "Izbor agenta je ispravan."
+          Mora biti postavljen role_zabbix_agent_server (pasivne provere)
+          ili role_zabbix_agent_server_active (aktivne provere). Bez
+          ijednog od njih agent nema sa kim da komunicira.
+        quiet: true
 
-    # TLS bez kljuca bi proizveo konfiguraciju koju agent odbija da
-    # ucita, pa servis ne bi startovao.
+    - name: Provera - definisan Hostname
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_agent_hostname | length > 0
+        fail_msg: >-
+          role_zabbix_agent_hostname ne sme biti prazan - agent bi zadrzao
+          podrazumevanu vrednost "Zabbix server" iz stock konfiguracije.
+        quiet: true
+
+    - name: Provera - role_zabbix_agent_config je recnik
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_agent_config is mapping
+        fail_msg: >-
+          role_zabbix_agent_config mora biti recnik (kljuc: vrednost).
+        quiet: true
+
+    - name: Provera - rezervisani kljucevi nisu u role_zabbix_agent_config
+      ansible.builtin.assert:
+        that:
+          - (role_zabbix_agent_config.keys() | list
+             | intersect(_zabbix_agent_reserved_keys) | length) == 0
+        fail_msg: >-
+          Sledeci kljucevi su rezervisani i rola ih ispisuje sama:
+          {{ role_zabbix_agent_config.keys() | list
+             | intersect(_zabbix_agent_reserved_keys) | join(', ') }}.
+          Koristi namenske varijable (role_zabbix_agent_server,
+          role_zabbix_agent_server_active, role_zabbix_agent_hostname,
+          role_zabbix_agent_tls_psk*).
+        quiet: true
+
+    - name: Provera - PSK identitet postavljen ako je PSK definisan
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_agent_tls_psk_identity | length > 0
+        fail_msg: >-
+          Kada je role_zabbix_agent_tls_psk postavljen, mora postojati i
+          role_zabbix_agent_tls_psk_identity.
+        quiet: true
+      when: _zabbix_agent_tls_enabled | bool
+
+    - name: Provera - PSK je dovoljno dugacak heksadecimalni string
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_agent_tls_psk is match('^[0-9a-fA-F]{32,}$')
+        fail_msg: >-
+          role_zabbix_agent_tls_psk mora biti heksadecimalni string od
+          najmanje 32 znaka. Generisi ga sa: openssl rand -hex 32
+        quiet: true
+      no_log: true
+      when: _zabbix_agent_tls_enabled | bool
+
+    # -----------------------------------------------------------------------
+    # Instalacija
+    # -----------------------------------------------------------------------
+
+    - name: Instalacija Zabbix agenta
+      ansible.builtin.apt:
+        name: "{{ _zabbix_agent_package }}"
+        state: "{{ role_zabbix_agent_package_state }}"
+        update_cache: true
+        cache_valid_time: 3600
+
+    # -----------------------------------------------------------------------
+    # Otkrivanje include direktorijuma
     #
-    # TLSAccept sme sadrzati vise vrednosti razdvojenih zarezom
-    # ("unencrypted,psk"), pa se proverava pripadnost a ne jednakost.
-    - name: "Provera PSK konfiguracije"
+    # Cita se instalirana konfiguracija i iz nje izvlace Include linije.
+    # Fajl se NE MENJA - slurp je citanje, ostaje idempotentno.
+    # -----------------------------------------------------------------------
+
+    - name: Ucitaj glavnu konfiguraciju agenta
+      ansible.builtin.slurp:
+        src: "{{ _zabbix_agent_main_conf }}"
+      register: _zabbix_agent_conf_raw
+      when: role_zabbix_agent_include_dir | length == 0
+
+    - name: Izdvoj aktivne Include vrednosti
+      ansible.builtin.set_fact:
+        # Zabbix priznaje komentar samo na pocetku linije, pa je dovoljno
+        # odbaciti sve sto ne pocinje sa "Include".
+        _zabbix_agent_include_values: >-
+          {{ (_zabbix_agent_conf_raw.content | b64decode).splitlines()
+             | map('trim')
+             | select('match', '^Include\s*=')
+             | map('regex_replace', '^Include\s*=\s*', '')
+             | map('trim')
+             | reject('equalto', '')
+             | list }}
+      when: role_zabbix_agent_include_dir | length == 0
+
+    - name: Odaberi Include vrednost koja pokazuje na direktorijum
+      ansible.builtin.set_fact:
+        # Prednost ima vrednost sa maskom (.../*.conf), zatim vrednost koja
+        # se zavrsava kosom crtom. Vrednosti koje pokazuju na pojedinacan
+        # fajl se preskacu - u njih ne mozemo nista da upisemo.
+        _zabbix_agent_include_glob: >-
+          {{ ((_zabbix_agent_include_values | select('search', '\*') | list)
+              + (_zabbix_agent_include_values | select('search', '/$') | list)
+              + ['']) | first }}
+      when: role_zabbix_agent_include_dir | length == 0
+
+    - name: Odredi include direktorijum
+      ansible.builtin.set_fact:
+        _zabbix_agent_include_dir: >-
+          {{ role_zabbix_agent_include_dir
+             if (role_zabbix_agent_include_dir | length > 0)
+             else (_zabbix_agent_include_glob | dirname
+                   if ('*' in _zabbix_agent_include_glob)
+                   else (_zabbix_agent_include_glob | regex_replace('/+$', ''))) }}
+        # Ako maska *.conf postoji, zaostali fajlovi bez te ekstenzije nisu
+        # ukljuceni i stroga provera nije potrebna. Kod rucno zadate putanje
+        # ne znamo kako Include izgleda, pa se ide na stroziju pretpostavku.
+        _zabbix_agent_include_has_glob: >-
+          {{ ('*' in _zabbix_agent_include_glob)
+             if (role_zabbix_agent_include_dir | length == 0)
+             else false }}
+
+    - name: Provera - include direktorijum je pronadjen
       ansible.builtin.assert:
         that:
-          - role_zabbix_agent_tls_psk_identity | default('') | length > 0
-          - role_zabbix_agent_tls_psk | default('') | length > 0
+          - _zabbix_agent_include_dir | length > 0
         fail_msg: >-
-          TLS je postavljen na "psk", ali nedostaje
-          role_zabbix_agent_tls_psk_identity ili
-          role_zabbix_agent_tls_psk. Kljuc generisi sa:
-          openssl rand -hex 32
-        success_msg: "PSK konfiguracija je potpuna."
-      no_log: true
-      when: >-
-        'psk' in (role_zabbix_agent_tls_connect | default('unencrypted'))
-        or 'psk' in (role_zabbix_agent_tls_accept | default('unencrypted'))
+          U {{ _zabbix_agent_main_conf }} nije pronadjena nijedna aktivna
+          Include direktiva koja pokazuje na direktorijum. Bez nje drop-in
+          fajl ne bi bio ucitan. Dodaj Include liniju u glavnu konfiguraciju
+          i postavi role_zabbix_agent_include_dir na tu putanju.
+        quiet: true
 
-    # -----------------------------------------------------------------
-    # 2. Instalacija
-    # -----------------------------------------------------------------
-    # Ako paket nije dostupan, gotovo uvek znaci da Zabbix
-    # repozitorijum nije dodat. Originalna apt greska ostaje u ispisu,
-    # a rescue grana ispod dodaje objasnjenje sta proveriti.
-
-    - name: "Instalacija Zabbix agenta"
-      block:
-
-        - name: "Instalacija paketa {{ role_zabbix_agent_package }}"
-          ansible.builtin.apt:
-            name: >-
-              {{ role_zabbix_agent_package }}{{
-                 '=' ~ role_zabbix_agent_version
-                 if role_zabbix_agent_version | default('') | length > 0
-                 else '' }}
-            state: present
-            update_cache: true
-            cache_valid_time: 3600
-          notify: "Restartuj Zabbix agenta"
-
-      rescue:
-
-        - name: "Objasnjenje neuspele instalacije"
-          ansible.builtin.fail:
-            msg: >-
-              Instalacija paketa "{{ role_zabbix_agent_package }}" nije
-              uspela. Najcesci uzrok je da Zabbix repozitorijum nije
-              dodat — host mora biti i u grupi [apply_repos], a
-              apply_repos mora ici pre deploy_zabbix_agent u
-              playbook.yml. Proveri sa:
-              apt-cache policy {{ role_zabbix_agent_package }}
-              Drugi mogucnost je zakovana verzija koja u
-              repozitorijumu ne postoji; dostupne vidis sa:
-              apt-cache madison {{ role_zabbix_agent_package }}
-
-    # -----------------------------------------------------------------
-    # 3. PSK kljuc
-    # -----------------------------------------------------------------
-    # Fajl mora biti citljiv iskljucivo za zabbix korisnika — agent
-    # odbija da startuje ako su dozvole sire.
-
-    - name: "Upis PSK kljuca"
-      ansible.builtin.copy:
-        content: "{{ role_zabbix_agent_tls_psk }}"
-        dest: "{{ role_zabbix_agent_tls_psk_file }}"
-        owner: zabbix
-        group: zabbix
-        mode: '0400'
-      no_log: true
-      when: >-
-        'psk' in (role_zabbix_agent_tls_connect | default('unencrypted'))
-        or 'psk' in (role_zabbix_agent_tls_accept | default('unencrypted'))
-      notify: "Restartuj Zabbix agenta"
-
-    # -----------------------------------------------------------------
-    # 4. Konfiguracija
-    # -----------------------------------------------------------------
-
-    - name: "Folder za dodatnu konfiguraciju"
+    - name: Obezbedi postojanje include direktorijuma
       ansible.builtin.file:
         path: "{{ _zabbix_agent_include_dir }}"
         state: directory
         owner: root
         group: root
-        mode: '0755'
+        mode: "0755"
 
-    - name: "Upis konfiguracionog fajla"
-      ansible.builtin.template:
-        src: zabbix_agent.conf.j2
-        dest: "{{ _zabbix_agent_config_file }}"
-        owner: root
+    # -----------------------------------------------------------------------
+    # Provera zaostalih fajlova
+    #
+    # Relevantno samo kada Include pokazuje na go direktorijum: tada Zabbix
+    # ucitava svaki fajl u njemu. Jedan .dpkg-old ili fajl sa tildom znaci
+    # dupliran parametar i agenta koji se ponasa nepredvidivo ili ne startuje.
+    # -----------------------------------------------------------------------
+
+    - name: Potrazi rezervne kopije u include direktorijumu
+      ansible.builtin.find:
+        paths: "{{ _zabbix_agent_include_dir }}"
+        patterns:
+          - "*~"
+          - "*.bak"
+          - "*.orig"
+          - "*.save"
+          - "*.dpkg-old"
+          - "*.dpkg-new"
+          - "*.dpkg-dist"
+          - "*.ucf-old"
+          - "*.rpmsave"
+        file_type: file
+      register: _zabbix_agent_stray
+      when:
+        - role_zabbix_agent_include_strict | bool
+        - not (_zabbix_agent_include_has_glob | bool)
+
+    - name: Provera - nema rezervnih kopija u include direktorijumu
+      ansible.builtin.assert:
+        that:
+          - _zabbix_agent_stray.files | length == 0
+        fail_msg: >-
+          Include direktiva pokazuje na direktorijum bez *.conf maske, pa
+          Zabbix ucitava sve fajlove iz {{ _zabbix_agent_include_dir }}.
+          Pronadjene rezervne kopije koje treba ukloniti:
+          {{ _zabbix_agent_stray.files | map(attribute='path') | join(', ') }}
+        quiet: true
+      when:
+        - role_zabbix_agent_include_strict | bool
+        - not (_zabbix_agent_include_has_glob | bool)
+
+    # -----------------------------------------------------------------------
+    # PSK
+    # -----------------------------------------------------------------------
+
+    - name: Upisi PSK fajl
+      ansible.builtin.copy:
+        content: "{{ role_zabbix_agent_tls_psk }}\n"
+        dest: "{{ role_zabbix_agent_tls_psk_file }}"
+        owner: zabbix
         group: zabbix
-        mode: '0640'
-        backup: true
-      notify: "Restartuj Zabbix agenta"
+        mode: "0600"
+      no_log: true
+      when: _zabbix_agent_tls_enabled | bool
+      notify: Restartuj Zabbix agenta
 
-    # -----------------------------------------------------------------
-    # 5. Servis
-    # -----------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Drop-in konfiguracija
+    #
+    # backup je NAMERNO iskljucen: Ansible-ova rezervna kopija bi zavrsila u
+    # istom direktorijumu i - kada Include nema *.conf masku - bila ucitana
+    # zajedno sa originalom. Prethodna verzija je ionako u git-u i u
+    # varijablama, pa gubitka nema.
+    # -----------------------------------------------------------------------
 
-    - name: "Servis {{ _zabbix_agent_service }}"
+    - name: Upisi drop-in konfiguraciju
+      ansible.builtin.template:
+        src: dropin.conf.j2
+        dest: "{{ _zabbix_agent_include_dir }}/{{ role_zabbix_agent_dropin_name }}"
+        owner: root
+        group: root
+        mode: "0644"
+        backup: false
+      notify: Restartuj Zabbix agenta
+
+    # -----------------------------------------------------------------------
+    # Servis
+    # -----------------------------------------------------------------------
+
+    - name: Servis agenta pokrenut i omogucen
       ansible.builtin.service:
         name: "{{ _zabbix_agent_service }}"
-        enabled: "{{ role_zabbix_agent_service_enabled | default(true) | bool }}"
-        state: "{{ role_zabbix_agent_service_state | default('started') }}"
-
-  when: role_zabbix_agent_enabled | default(false) | bool
+        enabled: "{{ role_zabbix_agent_service_enabled | bool }}"
+        state: "{{ role_zabbix_agent_service_state }}"
