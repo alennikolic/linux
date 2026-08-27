@@ -133,18 +133,16 @@ role_zabbix_web_http_redirect: true
 # ---------------------------------------------------------------------
 # Sertifikat i kljuc
 # ---------------------------------------------------------------------
-# Putanje na CILJNOM hostu. Fajlovi mogu doci na TRI nacina, redom
-# kojim ih rola razmatra:
+# Putanje na CILJNOM hostu.
 #
-#   1. Sadrzaj zadat kroz role_zabbix_web_tls_cert_content i
-#      _key_content — rola ih upisuje na putanje ispod. Ovo uvek ima
-#      prednost i prepisuje postojece fajlove.
+# Rola NE prima sadrzaj sertifikata ni kljuca kroz varijable — svesna
+# odluka. Privatni kljuc ne prolazi kroz Ansible varijable, nego se
+# donosi na host van ove role: kroz rolu "root_ca", ACME klijenta, ili
+# rucno. Ostaju DVA nacina:
 #
-#   2. Fajlovi vec postoje na hostu — postavila ih je rola "root_ca",
-#      doneti su rucno, ili ih je ova rola napravila ranije. Rola ih
-#      tada samo koristi.
+#   1. Fajlovi vec postoje na hostu — rola ih SAMO KORISTI i ne dira.
 #
-#   3. Fajlova nema — rola pravi PRIVREMEN self-signed sertifikat,
+#   2. Fajlova nema — rola pravi PRIVREMEN self-signed sertifikat,
 #      ako je role_zabbix_web_tls_selfsigned true.
 #
 # Sertifikat treba da bude PUN LANAC (fullchain): prvo sertifikat
@@ -153,22 +151,6 @@ role_zabbix_web_http_redirect: true
 #
 role_zabbix_web_tls_cert: /etc/ssl/certs/zabbix-frontend-fullchain.pem
 role_zabbix_web_tls_key: /etc/ssl/private/zabbix-frontend.key
-
-# Sadrzaj u PEM formatu. Prazno znaci da se koriste fajlovi sa putanja
-# iznad.
-#
-#   host_vars/srv-web-01.yml
-#     role_zabbix_web_tls_cert_content: |
-#       -----BEGIN CERTIFICATE-----
-#       ...
-#     role_zabbix_web_tls_key_content: |
-#       -----BEGIN PRIVATE KEY-----
-#       ...
-#
-# Privatni kljuc je TAJNA — drzi ga u host_vars, van git-a.
-#
-role_zabbix_web_tls_cert_content: ""
-role_zabbix_web_tls_key_content: ""
 
 # ---------------------------------------------------------------------
 # Automatski self-signed sertifikat
