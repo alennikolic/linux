@@ -60,37 +60,20 @@ role_zabbix_web_listen_port: 80
 role_zabbix_web_hostname: "zabbix.example.com"
 ```
 
-Sertifikat i ključ rola traži na `role_zabbix_web_tls_cert` i `role_zabbix_web_tls_key`. Materijal može doći na tri načina, kojima rola pristupa tim redom.
+Sertifikat i ključ rola traži na `role_zabbix_web_tls_cert` i `role_zabbix_web_tls_key`.
 
-### 1. Sadržaj zadat u varijablama
+**Rola ne prima sadržaj sertifikata ni ključa kroz varijable** — svesna odluka. Privatni ključ ne prolazi kroz Ansible varijable. Materijal se donosi na host van ove role, a rola ga samo koristi. Ostaju dva načina.
 
-Ima prednost nad svime i prepisuje postojeće fajlove pri svakom pokretanju.
+### 1. Fajlovi već postoje na hostu
 
-```yaml
-role_zabbix_web_tls_cert_content: |
-  -----BEGIN CERTIFICATE-----
-  ...sertifikat hosta...
-  -----END CERTIFICATE-----
-  -----BEGIN CERTIFICATE-----
-  ...sertifikat CA...
-  -----END CERTIFICATE-----
-
-role_zabbix_web_tls_key_content: |
-  -----BEGIN PRIVATE KEY-----
-  ...
-  -----END PRIVATE KEY-----
-```
-
-### 2. Fajlovi već postoje na hostu
-
-Postavila ih je rola `root_ca`, doneti su ručno, ili ih je ova rola napravila ranije. Rola ih tada **samo koristi i ne dira**.
+Postavila ih je rola `root_ca`, doneti su ručno, isporučio ih je ACME klijent, ili ih je ova rola napravila ranije. Rola ih tada **samo koristi i ne dira**.
 
 ```yaml
 role_zabbix_web_tls_cert: /root/ca/certs/zabbix-frontend-fullchain.crt
 role_zabbix_web_tls_key: /root/ca/private/zabbix-frontend.key
 ```
 
-### 3. Automatski self-signed
+### 2. Automatski self-signed
 
 Kada **nijedan** od dva fajla ne postoji, rola pravi privremeni self-signed sertifikat, tako da frontend odmah radi preko HTTPS-a. Podrazumevano uključeno.
 
@@ -117,8 +100,6 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 Rola ih neće prepisati, jer nove pravi isključivo kada **oba** fajla nedostaju.
-
-Alternativa: obriši oba fajla i zadaj sadržaj kroz `_cert_content` / `_key_content`, pa pusti rolu.
 
 ---
 
@@ -167,8 +148,6 @@ Alternativa: obriši oba fajla i zadaj sadržaj kroz `_cert_content` / `_key_con
 | `role_zabbix_web_http_redirect` | `true` | Preusmerava HTTP na HTTPS. |
 | `role_zabbix_web_tls_cert` | `/etc/ssl/certs/zabbix-frontend-fullchain.pem` | Putanja do punog lanca. |
 | `role_zabbix_web_tls_key` | `/etc/ssl/private/zabbix-frontend.key` | Putanja do privatnog ključa. |
-| `role_zabbix_web_tls_cert_content` | `""` | PEM sadržaj. Prepisuje fajl. |
-| `role_zabbix_web_tls_key_content` | `""` | PEM sadržaj. **Tajna.** |
 | `role_zabbix_web_tls_protocols` | `TLSv1.2 TLSv1.3` | Dozvoljene verzije. |
 | `role_zabbix_web_tls_ciphers` | Mozilla intermediate | Spisak šifri. |
 | `role_zabbix_web_http2` | `true` | HTTP/2. Sintaksa se bira prema verziji Nginx-a. |
@@ -276,6 +255,8 @@ role_zabbix_web_nginx_extra_config: |
 ## Napomene
 
 **Čarobnjak se preskače.** Kada `zabbix.conf.php` postoji i sadrži ispravne podatke, frontend odmah prikazuje ekran za prijavu. Podrazumevani nalog je `Admin` sa lozinkom `zabbix` — **promeni je odmah po prvoj prijavi.**
+
+**Rola ne unosi TLS materijal kroz varijable.** Privatni ključ ne prolazi kroz Ansible — ne završava u `host_vars`, ne prolazi kroz templating, ne pojavljuje se u izlazu. Sertifikat i ključ se donose na host nezavisno od ove role, ili ih rola napravi sama kao privremene.
 
 **Self-signed se pravi samo kada oba fajla nedostaju.** Čim jedan postoji, rola ne pravi ništa — inače bi ručno donet sertifikat bio prepisan pri sledećem pokretanju. Ako postoji tačno jedan fajl, rola prekida rad, jer je to gotovo uvek trag prekinutog ranijeg pokušaja.
 
