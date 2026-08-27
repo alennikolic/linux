@@ -1,16 +1,49 @@
 ---
 # roles/zabbix_proxy/vars/main.yml
 #
-# Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
-# group_vars ili host_vars.
+# Izvedene vrednosti. NISU javni interfejs role - ne postavljaj ih u
+# group_vars ili host_vars. Prefiks donje crte je znak upozorenja.
 
-# zabbix-proxy-sqlite3 / zabbix-proxy-mysql / zabbix-proxy-pgsql
-_zabbix_proxy_package: "zabbix-proxy-{{ role_zabbix_proxy_db_backend }}"
+# Fiksno, jer rola podrzava iskljucivo SQLite.
+_zabbix_proxy_package: zabbix-proxy-sqlite3
 
 _zabbix_proxy_service: zabbix-proxy
-_zabbix_proxy_config_file: /etc/zabbix/zabbix_proxy.conf
 
-# Folder u kojem zivi SQLite fajl.
+# Glavna konfiguracija. Rola je dodiruje samo zbog Include linije.
+_zabbix_proxy_main_conf: /etc/zabbix/zabbix_proxy.conf
+
+# Puna putanja drop-in fajla.
+_zabbix_proxy_dropin_path: >-
+  {{ role_zabbix_proxy_include_dir }}/{{ role_zabbix_proxy_dropin_name }}
+
+# Folder u kojem zivi SQLite fajl. Upis mora biti dozvoljen nad folderom,
+# ne samo nad fajlom - SQLite pravi i -journal / -wal fajlove pored baze.
 _zabbix_proxy_db_dir: "{{ role_zabbix_proxy_db_name | dirname }}"
 
-_zabbix_proxy_uses_sqlite: "{{ role_zabbix_proxy_db_backend == 'sqlite3' }}"
+# Server prihvata string ili listu; Zabbix ocekuje jednu liniju sa
+# vrednostima razdvojenim zarezom.
+_zabbix_proxy_server_value: >-
+  {{ role_zabbix_proxy_server | join(',')
+     if (role_zabbix_proxy_server is sequence and role_zabbix_proxy_server is not string)
+     else role_zabbix_proxy_server }}
+
+# TLS se ukljucuje samim postojanjem PSK vrednosti - nema zasebnog prekidaca
+# koji bi mogao da se raziđe sa stvarnim stanjem.
+_zabbix_proxy_tls_enabled: "{{ (role_zabbix_proxy_tls_psk | default('') | string | length) > 0 }}"
+
+# Kljucevi koje rola ispisuje sama. Ako bi se nasli i u recniku, u fajlu bi
+# se pojavili dvaput, a dupliran parametar u istom fajlu nema definisano
+# ponasanje.
+#
+# Include je rezervisan iz drugog razloga: ugnjezdeni include iz drop-ina
+# radi, ali redosled ucitavanja tada postaje potpuno neproziran.
+_zabbix_proxy_reserved_keys:
+  - Hostname
+  - Server
+  - ProxyMode
+  - DBName
+  - TLSConnect
+  - TLSAccept
+  - TLSPSKIdentity
+  - TLSPSKFile
+  - Include
