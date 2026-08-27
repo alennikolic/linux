@@ -1,8 +1,11 @@
 ---
 # roles/zabbix_agent/handlers/main.yml
+#
+# Restart, ne reload. Zabbix agent ne cita konfiguraciju ponovo na SIGHUP
+# u meri koja bi pokrila sve parametre, a sintaksna greska u include fajlu
+# sprecava pokretanje - bolje je da to odmah bude vidljivo.
 
-- name: "Restartuj Zabbix agenta"
+- name: Restartuj Zabbix agenta
   ansible.builtin.service:
     name: "{{ _zabbix_agent_service }}"
     state: restarted
-  when: role_zabbix_agent_service_state != 'stopped'
