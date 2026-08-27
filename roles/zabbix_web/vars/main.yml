@@ -9,14 +9,68 @@ _zabbix_web_conf_package: zabbix-nginx-conf
 
 _zabbix_web_service: nginx
 
-# Paket zabbix-nginx-conf isporucuje ovaj fajl i pravi vezu ka njemu
-# iz /etc/nginx/conf.d/zabbix.conf. Rola prepisuje njegov sadrzaj.
-_zabbix_web_vhost_file: /etc/zabbix/nginx.conf
+# ---------------------------------------------------------------------
+# Vendorovi fajlovi — ROLA IH NE DIRA
+# ---------------------------------------------------------------------
+# Oba su dpkg conffile. Ostaju na disku tacno onakvi kakvi su iz
+# paketa dosli, sto znaci: nikad pitanje pri nadogradnji, i uvek
+# dostupna referenca sa kojom mozes uporediti nasu konfiguraciju.
+#
+_zabbix_web_vendor_vhost: /etc/zabbix/nginx.conf
+_zabbix_web_vendor_pool: /etc/zabbix/php-fpm.conf
+
+# ---------------------------------------------------------------------
+# Veze koje ih aktiviraju — ROLA IH UKLANJA
+# ---------------------------------------------------------------------
+# Ove veze pravi postinst skripta paketa, NISU conffile. Njihovo
+# uklanjanje ne menja stanje nijednog fajla koji dpkg prati, a
+# iskljucuje vendorovu konfiguraciju iz upotrebe.
+#
+# Vendorov vhost mora nestati iz upotrebe: njegov server blok je
+# aktivan, sa zakomentarisanim "listen" pa Nginx pretpostavlja port
+# 80 i taj blok postaje podrazumevani server. Uporedo sa nasim to
+# daje nepredvidivo ponasanje.
+#
+_zabbix_web_vendor_vhost_link: /etc/nginx/conf.d/zabbix.conf
+
+# ---------------------------------------------------------------------
+# Nasi fajlovi
+# ---------------------------------------------------------------------
+# Imena se namerno razlikuju od vendorovih. Paket ih nikad nece
+# dodirnuti, a i da postinst ponovo napravi svoje veze, nasi fajlovi
+# ostaju netaknuti.
+#
+_zabbix_web_vhost_file: /etc/nginx/conf.d/zabbix-ansible.conf
+
+# Ime pool-a se razlikuje od vendorovog ("zabbix"). Dva pool-a sa
+# istim imenom sprecavaju pokretanje CELOG php-fpm servisa, ne samo
+# tog pool-a — razlicito ime cini uklanjanje veze bezopasnim ako
+# zakaze.
+_zabbix_web_pool_name: zabbix-ansible
+_zabbix_web_php_socket: /run/php/zabbix-ansible.sock
 
 _zabbix_web_config_file: /etc/zabbix/web/zabbix.conf.php
 
-# PHP-FPM socket iz pool-a koji dolazi uz zabbix-nginx-conf.
-_zabbix_web_php_socket: /run/php/zabbix.sock
+# ---------------------------------------------------------------------
+# Putanje izvedene iz otkrivene verzije PHP-a
+# ---------------------------------------------------------------------
+# Ansible vrednosti u vars/ racuna tek kad zatrebaju, pa smeju da se
+# oslanjaju na cinjenicu koju rola postavlja u toku rada.
+#
+_zabbix_web_php_conf_dir: "/etc/php/{{ _zabbix_web_php_version }}/fpm"
+_zabbix_web_pool_file: "{{ _zabbix_web_php_conf_dir }}/pool.d/zabbix-ansible.conf"
+_zabbix_web_vendor_pool_link: "{{ _zabbix_web_php_conf_dir }}/pool.d/zabbix.conf"
+_zabbix_web_php_service: "php{{ _zabbix_web_php_version }}-fpm"
+_zabbix_web_php_fpm_binary: "/usr/sbin/php-fpm{{ _zabbix_web_php_version }}"
+
+# Fajl iz ranije verzije role. Upisivao je PHP vrednosti u conf.d,
+# gde ih je vendorov pool pregazio — nikad nije radio. Rola ga sada
+# uklanja.
+_zabbix_web_legacy_ini: "{{ _zabbix_web_php_conf_dir }}/conf.d/99-zabbix.ini"
+
+# ---------------------------------------------------------------------
+# TLS
+# ---------------------------------------------------------------------
 
 # CSR za self-signed sertifikat. Ime se izvodi iz putanje kljuca
 # zamenom ekstenzije, da bi pratilo eventualnu izmenu te putanje.
