@@ -1,0 +1,158 @@
+---
+# roles/zabbix_webdriver/tasks/main.yml
+
+- name: Blok zabbix_webdriver
+  when: role_zabbix_webdriver_enabled | default(false) | bool
+  block:
+
+    # ------------------------------------------------------------------
+    # Provere pre bilo kakve izmene sistema
+    # ------------------------------------------------------------------
+
+    - name: Provera podrzane distribucije
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] == 'Debian'
+        fail_msg: >-
+          Rola zabbix_webdriver podrzava samo Debian/Ubuntu.
+          Detektovano: {{ ansible_facts['os_family'] }}.
+        quiet: true
+
+    - name: Provera obaveznih vrednosti
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_webdriver_image | length > 0
+          - role_zabbix_webdriver_image_tag | length > 0
+          - role_zabbix_webdriver_container_name | length > 0
+          - role_zabbix_webdriver_bind_address | length > 0
+          - role_zabbix_webdriver_port | int > 0
+          - role_zabbix_webdriver_max_sessions | int >= 1
+        fail_msg: >-
+          Neka od obaveznih varijabli role zabbix_webdriver je prazna ili
+          neispravna. Proveri image, image_tag, container_name, bind_address,
+          port i max_sessions.
+        quiet: true
+
+    - name: Provera da bind adresa nije 0.0.0.0
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_webdriver_bind_address not in ['0.0.0.0', '*', '::']
+        fail_msg: >-
+          role_zabbix_webdriver_bind_address je postavljen na
+          {{ role_zabbix_webdriver_bind_address }}. Docker objavljene portove
+          upisuje u iptables ispred UFW-a, pa bi WebDriver bio dostupan spolja
+          i bez zastite. Koristi 127.0.0.1 ili adresu docker0 mosta.
+        quiet: true
+
+    - name: Provera da je Docker instaliran
+      ansible.builtin.stat:
+        path: "{{ role_zabbix_webdriver_docker_bin }}"
+      register: _zabbix_webdriver_docker_bin_stat
+
+    - name: Prekid ako Docker nedostaje
+      ansible.builtin.assert:
+        that:
+          - _zabbix_webdriver_docker_bin_stat.stat.exists
+          - _zabbix_webdriver_docker_bin_stat.stat.executable | default(false)
+        fail_msg: >-
+          Docker nije pronadjen na {{ role_zabbix_webdriver_docker_bin }}.
+          Rola zabbix_webdriver ga namerno ne instalira. Dodaj host u grupe
+          apply_repos i deploy_packages, sa Docker repozitorijumom i paketima
+          docker-ce, docker-ce-cli i containerd.io.
+        quiet: true
+
+    # Mrezne cinjenice se osvezavaju jer je docker0 most mogao nastati u
+    # istom pokretanju, posle pocetnog gather_facts.
+    - name: Osvezavanje mreznih cinjenica
+      ansible.builtin.setup:
+        gather_subset:
+          - network
+      when: role_zabbix_webdriver_check_bind_address | bool
+
+    - name: Provera da bind adresa postoji na hostu
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_webdriver_bind_address in ansible_facts['all_ipv4_addresses']
+        fail_msg: >-
+          Adresa {{ role_zabbix_webdriver_bind_address }} ne postoji ni na
+          jednom interfejsu ovog hosta. Ako je docker0 most na drugoj
+          podmrezi, proveri sa "ip -4 addr show docker0" i podesi
+          role_zabbix_webdriver_bind_address.
+        quiet: true
+      when: role_zabbix_webdriver_check_bind_address | bool
+
+    # ------------------------------------------------------------------
+    # Slika
+    # ------------------------------------------------------------------
+
+    # Preuzimanje ide zasebnim taskom, a ne kroz ExecStartPre, da servis ne
+    # bi zavisio od mreze pri svakom butu.
+    - name: Preuzimanje Docker slike
+      ansible.builtin.command:
+        cmd: "{{ role_zabbix_webdriver_docker_bin }} pull {{ _zabbix_webdriver_image_ref }}"
+      register: _zabbix_webdriver_pull
+      changed_when: "'Image is up to date' not in _zabbix_webdriver_pull.stdout"
+      when: role_zabbix_webdriver_pull | bool
+      notify: Restart zabbix webdriver
+
+    # ------------------------------------------------------------------
+    # systemd unit
+    # ------------------------------------------------------------------
+
+    - name: Upis systemd unit fajla
+      ansible.builtin.template:
+        src: webdriver.service.j2
+        dest: "{{ _zabbix_webdriver_unit_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify:
+        - Ponovno ucitavanje systemd konfiguracije
+        - Restart zabbix webdriver
+
+    # Handleri se izvrsavaju tek na kraju play-a, a naredni task vec ocekuje
+    # ziv servis - zato se ovde pozivaju odmah.
+    - name: Primena handlera pre provere stanja
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ukljucivanje i pokretanje servisa
+      ansible.builtin.systemd:
+        name: "{{ _zabbix_webdriver_service }}"
+        enabled: "{{ role_zabbix_webdriver_service_enabled | bool }}"
+        state: "{{ role_zabbix_webdriver_service_state }}"
+        daemon_reload: true
+
+    # ------------------------------------------------------------------
+    # Provera spremnosti
+    # ------------------------------------------------------------------
+
+    - name: Cekanje da WebDriver prijavi spremnost
+      ansible.builtin.uri:
+        url: "{{ _zabbix_webdriver_status_url }}"
+        method: GET
+        return_content: true
+        status_code: 200
+      register: _zabbix_webdriver_status
+      until:
+        - _zabbix_webdriver_status.json is defined
+        - _zabbix_webdriver_status.json.value.ready | default(false) | bool
+      retries: "{{ role_zabbix_webdriver_wait_retries | int }}"
+      delay: "{{ role_zabbix_webdriver_wait_delay | int }}"
+      changed_when: false
+      when:
+        - role_zabbix_webdriver_wait_for_ready | bool
+        - role_zabbix_webdriver_service_state == 'started'
+
+    - name: Podsetnik na uskladjivanje sa Zabbix konfiguracijom
+      ansible.builtin.debug:
+        msg: >-
+          WebDriver je spreman na {{ _zabbix_webdriver_status_url }} sa
+          {{ role_zabbix_webdriver_max_sessions }} istovremenih sesija.
+          U konfiguraciji Zabbix proxy-ja ili servera mora stajati
+          WebDriverURL=http://{{ role_zabbix_webdriver_bind_address }}:{{ role_zabbix_webdriver_port }}
+          uz StartBrowserPollers koji nije veci od
+          {{ role_zabbix_webdriver_max_sessions }}.
+      when:
+        - role_zabbix_webdriver_wait_for_ready | bool
+        - role_zabbix_webdriver_service_state == 'started'
