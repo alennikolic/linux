@@ -1,15 +1,38 @@
 ---
 # roles/zabbix_server/vars/main.yml
 #
-# Izvedene vrednosti. Ovo NISU podesavanja — ne menjaj ih kroz
-# group_vars ili host_vars.
-#
-# Otkad semu uvozi rola "zabbix_db", ovoj roli vise ne treba ni
-# klijentski paket baze ni putanja do .sql skripte. Ostalo je samo
-# ime paketa, servisa i konfiguracionog fajla.
+# Izvedene vrednosti. NISU javni interfejs role - ne postavljaj ih u
+# group_vars ili host_vars. Prefiks donje crte je znak upozorenja.
 
 # zabbix-server-mysql / zabbix-server-pgsql
 _zabbix_server_package: "zabbix-server-{{ role_zabbix_server_db_backend }}"
 
 _zabbix_server_service: zabbix-server
-_zabbix_server_config_file: /etc/zabbix/zabbix_server.conf
+
+# Glavna konfiguracija. Rola je dodiruje samo zbog Include linije.
+_zabbix_server_main_conf: /etc/zabbix/zabbix_server.conf
+
+# Puna putanja drop-in fajla.
+_zabbix_server_dropin_path: >-
+  {{ role_zabbix_server_include_dir }}/{{ role_zabbix_server_dropin_name }}
+
+# Kljucevi koje rola ispisuje sama. Ako bi se nasli i u recniku, u fajlu bi
+# se pojavili dvaput, a dupliran parametar u istom fajlu nema definisano
+# ponasanje.
+#
+# Include je rezervisan iz drugog razloga: ugnjezdeni include iz drop-ina
+# radi, ali redosled ucitavanja tada postaje potpuno neproziran.
+_zabbix_server_reserved_keys:
+  - DBHost
+  - DBName
+  - DBUser
+  - DBPassword
+  - DBSocket
+  - DBPort
+  - Include
+
+# DBPort ima smisla samo kada se ide preko mreze. Uz "localhost" ili praznu
+# vrednost MySQL klijent koristi unix socket i port ignorise, pa bi linija
+# samo zavaravala onoga ko cita konfiguraciju.
+_zabbix_server_write_db_port: >-
+  {{ role_zabbix_server_db_host not in ['', 'localhost'] }}
