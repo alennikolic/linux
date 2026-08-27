@@ -135,11 +135,3 @@
   become: true
   roles:
     - zabbix_webdriver
-
-# Ne instalira softver — upisuje hostove, sablone i akcije kroz
-# Zabbix API. Otuda apply_ prefiks.
-- name: Provision Zabbix configuration
-  hosts: apply_zabbix_provisioning
-  become: yes
-  roles:
-    - zabbix_provisioning
