@@ -45,24 +45,63 @@ role_zabbix_agent_variant: agent2
 role_zabbix_agent_package_state: present
 
 # ---------------------------------------------------------------------------
-# Osnovni parametri
+# Adrese servera
 #
-# Ova tri parametra su izdvojena iz opsteg recnika namerno: bez njih agent
-# nema smisla, pa nad njima postoji assert provera. Da su unutar recnika,
-# korisnik koji u group_vars definise role_zabbix_agent_config potpuno bi
-# zamenio podrazumevani recnik (Ansible ne spaja recnike) i tiho ostao bez
-# Hostname vrednosti.
+# Ova dva parametra prihvataju tri oblika zapisa:
+#
+#   1. Skalar - upisuje se doslovno, bez ikakve obrade:
+#        role_zabbix_agent_server: 10.0.0.10
+#        role_zabbix_agent_server: "10.0.0.10,10.0.0.11"
+#
+#   2. Ravna lista - spaja se ZAREZOM:
+#        role_zabbix_agent_server: [10.0.0.10, 10.0.0.11]
+#        -> Server=10.0.0.10,10.0.0.11
+#
+#   3. Ugnjezdena lista - unutrasnja lista se spaja TACKOM-ZAREZOM,
+#      spoljasnja ZAREZOM:
+#        role_zabbix_agent_server_active:
+#          - [zbx-a1, "zbx-a2:20051"]
+#          - zbx-b
+#        -> ServerActive=zbx-a1;zbx-a2:20051,zbx-b
+#
+# ZNACENJE RAZDVAJACA - nije isto za oba parametra:
+#
+#   Server (pasivne provere) prima ISKLJUCIVO zarez. To je spisak adresa sa
+#   kojih agent prihvata konekcije; tacka-zarez tu nije razdvajac, pa bi cela
+#   niska bila protumacena kao jedna adresa i agent bi odbijao konekcije.
+#   Zato rola tacku-zarez u Server podrazumevano odbija (vidi
+#   role_zabbix_agent_server_allow_semicolon).
+#
+#   ServerActive (aktivne provere) razlikuje oba znaka:
+#     tacka-zarez -> clanovi JEDNOG klastera ili proxy grupe. Agent u datom
+#                    trenutku salje podatke samo jednom od njih i sam prelazi
+#                    na sledeci kad aktivni otkaze.
+#     zarez       -> NEZAVISNI serveri ili klasteri. Agent salje SVIMA.
+#
+#   ServerActive=zbx-a1;zbx-a2,zbx-b
+#                └ jedan klaster ┘ └ nezavisan ┘
+#
+# Napomene o formatu adresa:
+#   - port se odvaja dvotackom: zbx-a2:20051
+#   - IPv6 adresa sa portom mora biti u uglastim zagradama: [::1]:30051
+#   - razmaci oko razdvajaca su dozvoljeni, ali ih rola svejedno uklanja
 # ---------------------------------------------------------------------------
 
 # Adrese Zabbix servera ili proksija za PASIVNE provere (server pita agenta).
-# Prihvata string ili listu; lista se spaja zarezima.
-#   role_zabbix_agent_server: 10.0.0.10
-#   role_zabbix_agent_server: [10.0.0.10, 10.0.0.11]
 role_zabbix_agent_server: ""
 
-# Adrese za AKTIVNE provere (agent salje serveru). Format host[:port].
-#   role_zabbix_agent_server_active: 10.0.0.10:10051
+# Adrese za AKTIVNE provere (agent salje serveru).
 role_zabbix_agent_server_active: ""
+
+# Sigurnosna brava: kada je false, rola prekida izvrsavanje ako se u
+# izracunatoj vrednosti Server parametra nadje tacka-zarez - bilo da je stigla
+# kroz ugnjezdenu listu ili kroz doslovan string.
+#
+# Postavi na true samo ako namerno pises nesto sto Zabbix u ovom parametru
+# tumaci drugacije nego sto dokumentacija opisuje. U normalnom radu ostaje
+# false; ako ti treba failover za pasivne provere, jednostavno navedi sve
+# cvorove razdvojene zarezom - za Server je to ispravan zapis.
+role_zabbix_agent_server_allow_semicolon: false
 
 # Ime pod kojim se agent predstavlja serveru. Mora se poklapati sa imenom
 # hosta u Zabbix-u, inace aktivne provere nemaju gde da se prijave.
