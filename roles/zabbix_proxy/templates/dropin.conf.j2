@@ -1,0 +1,49 @@
+{{ '#' }} ===========================================================================
+{{ '#' }} UPRAVLJA ANSIBLE ROLA: zabbix_proxy
+{{ '#' }}
+{{ '#' }} Rucne izmene bice prebrisane pri sledecem prolazu role.
+{{ '#' }}
+{{ '#' }} Fajl se ucitava kroz Include direktivu na kraju
+{{ '#' }} {{ _zabbix_proxy_main_conf }}.
+{{ '#' }} Posto Zabbix obradjuje Include tamo gde ga procita, vrednosti odavde
+{{ '#' }} nadjacavaju iste parametre iz podrazumevane konfiguracije.
+{{ '#' }} ===========================================================================
+
+{{ '#' }} --- Identitet i rezim ------------------------------------------------
+{{ '#' }} Hostname i ProxyMode se MORAJU poklapati sa podesavanjima ovog
+{{ '#' }} proxy-ja u Zabbix serveru.
+ProxyMode={{ role_zabbix_proxy_mode }}
+Hostname={{ role_zabbix_proxy_hostname }}
+Server={{ _zabbix_proxy_server_value }}
+
+{{ '#' }} --- Baza -------------------------------------------------------------
+{{ '#' }} SQLite fajl; proxy ga kreira sam pri prvom pokretanju.
+DBName={{ role_zabbix_proxy_db_name }}
+{% if _zabbix_proxy_tls_enabled | bool %}
+
+{{ '#' }} --- TLS (PSK) --------------------------------------------------------
+{{ '#' }} Sama tajna je u {{ role_zabbix_proxy_tls_psk_file }} (mode 0600).
+{{ '#' }} Isti identitet i kljuc moraju biti upisani i u Zabbix serveru.
+TLSConnect=psk
+TLSAccept=psk
+TLSPSKIdentity={{ role_zabbix_proxy_tls_psk_identity }}
+TLSPSKFile={{ role_zabbix_proxy_tls_psk_file }}
+{% endif %}
+{% if role_zabbix_proxy_config | length > 0 %}
+
+{{ '#' }} --- Parametri iz role_zabbix_proxy_config ----------------------------
+{% for key, value in role_zabbix_proxy_config | dictsort %}
+{% if value is sequence and value is not string %}
+{% for item in value %}
+{{ key }}={{ item }}
+{% endfor %}
+{% else %}
+{{ key }}={{ value }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if role_zabbix_proxy_extra_config | length > 0 %}
+
+{{ '#' }} --- role_zabbix_proxy_extra_config -----------------------------------
+{{ role_zabbix_proxy_extra_config }}
+{% endif %}
