@@ -32,12 +32,29 @@
 
 # role_timezone_name: Europe/Belgrade
 
+# Rola "timezone" upisuje ceo /etc/chrony/chrony.conf, pa je lista
+# izvora OBAVEZNA za svaki host u grupi [apply_timezone]. Bez nje
+# rola prekida rad.
+#
+# Interni izvori:
+# role_timezone_ntp_servers:
+#   - ntp1.example.com
+#   - ntp2.example.com
+#
+# Javni pool — uz role_timezone_ntp_source_type: pool
+# role_timezone_ntp_source_type: pool
+# role_timezone_ntp_servers:
+#   - 0.pool.ntp.org
+#   - 1.pool.ntp.org
+
 # role_banner_text: |
 #   *****************************************************************
 #   * UPOZORENJE: Pristup samo za ovlascena lica                    *
 #   * Host: {{ inventory_hostname }}
 #   * Sve aktivnosti se beleze.                                     *
 #   *****************************************************************
+
+
 # ---------------------------------------------------------------------
 # Bootstrap: SSH kljuc kontrolnog cvora
 # ---------------------------------------------------------------------
