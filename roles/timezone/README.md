@@ -1,14 +1,16 @@
 # Rola: timezone
 
-Postavlja vremensku zonu sistema i, opciono, konfiguriše sinhronizaciju vremena.
+Postavlja vremensku zonu sistema i konfiguriše sinhronizaciju vremena preko `chrony`-ja.
 
-Dva su zadatka namerno razdvojena prekidačima. Zona se postavlja uvek; NTP deo je podrazumevano isključen, jer većina distribucija već ima ispravno podešenu sinhronizaciju i nema razloga da se dira.
+Rola radi tri stvari:
 
-| Šta rola radi | Podrazumevano |
+| Šta rola radi | Napomena |
 |---|---|
-| Postavlja vremensku zonu | uključeno |
-| Konfiguriše `systemd-timesyncd` ili `chrony` | isključeno |
-| Menja režim hardverskog sata | isključeno |
+| Postavlja vremensku zonu | uvek |
+| Instaliranje `chrony`-ja i upis izvora | uvek, lista izvora je obavezna |
+| Restart servisa koji keširaju `TZ` | samo ako je zona stvarno promenjena |
+
+Nema izbora između `chrony`-ja i `systemd-timesyncd`-a i nema drop-in konfiguracije. Rola upisuje **ceo** `/etc/chrony/chrony.conf`, pa je spisak izvora tačno ono što je zadato — ništa se ne dodaje iz podrazumevane konfiguracije, iz `/etc/chrony/conf.d` ni iz DHCP-a.
 
 ---
 
@@ -20,7 +22,9 @@ Kolekcija `community.general` (modul `timezone`):
 ansible-galaxy collection install community.general
 ```
 
-Za NTP deo rola zahteva Debian/Ubuntu — putanje konfiguracije se razlikuju po familiji distribucija. Postavljanje same zone radi svuda.
+Debian ili Ubuntu. Putanje i ime servisa se razlikuju na RHEL familiji, pa rola tamo prekida rad uz jasnu poruku.
+
+Izlazni UDP port 123 ka NTP izvorima mora biti prohodan.
 
 ---
 
@@ -48,72 +52,35 @@ role_timezone_enabled: false
 
 ## Varijable
 
-### Aktivacija
-
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
 | `role_timezone_enabled` | `false` | Kada je `false`, rola ne dira ništa. |
-
-### Vremenska zona
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
 | `role_timezone_name` | `Etc/UTC` | Ime zone po IANA bazi. |
-| `role_timezone_hwclock` | `""` | `UTC` ili `local`. Prazno = ne diraj. |
+| `role_timezone_ntp_servers` | `[]` | **Obavezno.** Spisak NTP izvora. |
+| `role_timezone_ntp_source_type` | `server` | `server` ili `pool`. Važi za celu listu. |
 | `role_timezone_restart_services` | `[]` | Servisi koji se restartuju posle promene zone. |
-
-### Sinhronizacija vremena
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_timezone_ntp_enabled` | `false` | Uključuje konfiguraciju NTP klijenta. |
-| `role_timezone_ntp_service` | `systemd-timesyncd` | `systemd-timesyncd` ili `chrony`. |
-| `role_timezone_ntp_servers` | `[]` | **Obavezno** kada je NTP uključen. |
-| `role_timezone_ntp_fallback_servers` | `[]` | Samo za `systemd-timesyncd`. |
-
-### chrony
-
-| Varijabla | Podrazumevano | Opis |
-|---|---|---|
-| `role_timezone_chrony_source_type` | `server` | `server`, `pool` ili `peer`. |
-| `role_timezone_chrony_iburst` | `true` | Ubrzava prvu sinhronizaciju. |
-| `role_timezone_chrony_makestep` | `"1.0 3"` | Skokovit ispravak u prvim merenjima. Prazno = ne upisuj. |
-| `role_timezone_chrony_disable_default_pools` | `false` | Gasi `pool` linije u osnovnom `chrony.conf`. |
 
 ---
 
 ## Primeri
 
-### Zona za sve hostove
+### Interni NTP izvori
 
 ```yaml
 # inventory/group_vars/all.yml
 role_timezone_name: Europe/Belgrade
-```
-
-### Interni NTP izvor u zatvorenoj mreži
-
-```yaml
-# inventory/group_vars/all.yml
-role_timezone_ntp_enabled: true
-role_timezone_ntp_service: chrony
 role_timezone_ntp_servers:
   - ntp1.example.com
   - ntp2.example.com
-role_timezone_chrony_disable_default_pools: true
 ```
 
-Bez poslednje linije host bi pored internih izvora pokušavao i javni pool iz osnovnog `chrony.conf`, što u mreži bez izlaza znači nepotrebna čekanja.
-
-### timesyncd sa rezervnim izvorom
+### Javni pool
 
 ```yaml
-role_timezone_ntp_enabled: true
-role_timezone_ntp_service: systemd-timesyncd
+role_timezone_ntp_source_type: pool
 role_timezone_ntp_servers:
-  - 10.0.0.53
-role_timezone_ntp_fallback_servers:
   - 0.pool.ntp.org
+  - 1.pool.ntp.org
 ```
 
 ### Host u drugoj zoni
@@ -123,11 +90,7 @@ role_timezone_ntp_fallback_servers:
 role_timezone_name: UTC
 ```
 
----
-
-## Napomene
-
-**Neki demoni ne vide promenu zone dok se ne restartuju.** `cron` i `rsyslog` čitaju `TZ` pri pokretanju i posle promene nastavljaju da rade po staroj zoni. Ako ti je to bitno:
+### Restart demona koji keširaju zonu
 
 ```yaml
 role_timezone_restart_services:
@@ -135,17 +98,23 @@ role_timezone_restart_services:
   - rsyslog
 ```
 
-Restart se izvršava **samo ako je zona stvarno promenjena** — ponovljeno pokretanje role ne restartuje ništa.
+---
 
-**chrony drop-in dodaje izvore, ne zamenjuje ih.** Rola upisuje `/etc/chrony/conf.d/99-ansible.conf`, a osnovni `/etc/chrony/chrony.conf` ostaje nedirnut sa svojim `pool` linijama. To je namerno — dve role koje pišu isti fajl su izvor sukoba. Za isključivu kontrolu nad izvorima koristi `role_timezone_chrony_disable_default_pools`.
+## Napomene
 
-**chrony stariji od 4.0 ne podržava `conf.d`.** Na Ubuntu 20.04 (chrony 3.5) drop-in bi bio uredno upisan ali nikada pročitan. Rola to hvata i prekida rad sa objašnjenjem. Rešenje je ručno dodavanje `confdir /etc/chrony/conf.d` u osnovni fajl ili prelazak na `systemd-timesyncd`.
+**Fajl `/etc/chrony/chrony.conf` je u potpunosti u vlasništvu role.** Sve što je bilo u njemu se briše pri prvom pokretanju — uključujući izvore koje je upisao instalacioni program, `confdir /etc/chrony/conf.d` i `sourcedir /run/chrony-dhcp`. Prethodna verzija se čuva kao `.conf.<timestamp>~` u istom folderu.
 
-**chrony i timesyncd ne rade istovremeno.** `chrony.service` ima `Conflicts=systemd-timesyncd.service`, pa pokretanjem chrony-ja timesyncd sam prestaje da radi. Rola ne mora ništa da gasi.
+**Posledica: DHCP više ne može da nametne NTP izvor.** Na sistemu koji dobija adresu preko DHCP-a to je čest izvor zabune — `chronyc sources` prikazuje server koji nigde nije zadat. Ovde toga nema.
 
-**`hwclock` u virtuelnim mašinama.** Postavljanje ove vrednosti može da padne jer hardverski sat nije dostupan. Podrazumevano je prazno — ne diraj ga bez razloga.
+**`role_timezone_ntp_source_type` važi za celu listu.** Mešanje javnog `pool`-a i internog `server`-a u istoj konfiguraciji nije podržano namerno; host u produkciji treba da ima jedan izvor istine o vremenu. Ako ti stvarno treba oboje, koristi `server` i upiši konkretne adrese javnih servera.
 
-**Zona sa velikim i malim slovima.** `Europe/Belgrade` je ispravno, `europe/belgrade` nije. Rola pre postavljanja proverava da fajl postoji u `/usr/share/zoneinfo` i prijavljuje jasnu grešku.
+**`systemd-timesyncd` se ne gasi eksplicitno.** `chrony.service` ima `Conflicts=systemd-timesyncd.service`, pa pokretanjem `chrony`-ja `timesyncd` sam prestaje da radi, i pri startu sistema i pri ručnom pokretanju.
+
+**Neki demoni ne vide promenu zone dok se ne restartuju.** `cron` i `rsyslog` čitaju `TZ` pri pokretanju i posle promene nastavljaju da rade po staroj zoni. Za njih postoji `role_timezone_restart_services`. Servis koji nije instaliran prekida rad role, pa u listu upisuj samo ono što na hostu zaista postoji.
+
+**Zona razlikuje velika i mala slova.** `Europe/Belgrade` jeste, `europe/belgrade` nije. Rola pre postavljanja proverava da fajl postoji u `/usr/share/zoneinfo` i prijavljuje jasnu grešku.
+
+**Nadogradnja paketa neće prepisati konfiguraciju.** `chrony.conf` je `conffile`; `dpkg` vidi lokalnu izmenu i zadržava postojeću verziju. Nova podrazumevana konfiguracija ostaje kao `chrony.conf.dpkg-dist` i može se bez posledica zanemariti.
 
 ---
 
@@ -163,17 +132,14 @@ roles/timezone/
 ├── tasks/
 │   └── main.yml
 └── templates/
-    ├── chrony.conf.j2
-    └── timesyncd.conf.j2
+    └── chrony.conf.j2
 ```
-
-`vars/main.yml` sadrži izvedene vrednosti — imena paketa, servisa i putanje konfiguracije po izabranom NTP demonu. Prefiks `_` označava da nisu deo javnog interfejsa role i da se ne menjaju kroz inventory.
 
 ---
 
 ## Idempotentnost
 
-Rola je idempotentna. Modul `community.general.timezone` poredi trenutnu zonu i menja je samo ako se razlikuje; `template` upisuje samo pri razlici u sadržaju; `replace` ne hvata već zakomentarisane linije. Ponovljeno pokretanje nad nepromenjenom konfiguracijom prijavljuje `ok`, ne `changed`.
+Rola je idempotentna. Modul `community.general.timezone` poredi trenutnu zonu i menja je samo ako se razlikuje; `template` upisuje samo pri razlici u sadržaju i restart `chrony`-ja aktivira isključivo preko handlera. Ponovljeno pokretanje nad nepromenjenom konfiguracijom prijavljuje `ok`, ne `changed`.
 
 ---
 
@@ -186,19 +152,23 @@ Rola je idempotentna. Modul `community.general.timezone` poredi trenutnu zonu i 
 # Primena na jedan host
 ./apply.sh --limit srv-web-01
 
-# Stanje sata i sinhronizacije
+# Zona i stanje sinhronizacije
 ansible srv-web-01 -m command -a "timedatectl status"
 
-# Izvori — timesyncd
-ansible srv-web-01 -m command -a "timedatectl show-timesync --all"
-
-# Izvori — chrony
+# Izvori — kolona ^* označava izvor po kome se sat trenutno vodi
 ansible srv-web-01 -m command -a "chronyc sources -v"
+
+# Odstupanje sata i kvalitet sinhronizacije
+ansible srv-web-01 -m command -a "chronyc tracking"
 ```
 
 ---
 
 ## Rešavanje problema
+
+**`assert` puca na praznoj listi izvora**
+
+Rola upisuje ceo `chrony.conf`, pa bez izvora host ne bi sinhronizovao vreme. Popuni `role_timezone_ntp_servers` u `group_vars/all.yml` ili isključi rolu za taj host.
 
 **`assert` puca na zoni koja ne postoji**
 
@@ -210,18 +180,15 @@ ansible srv-web-01 -m command -a "timedatectl list-timezones"
 
 **Vreme se ne sinhronizuje iako je servis pokrenut**
 
-Proveri da li izvori uopšte odgovaraju:
-
 ```bash
-chronyc sources -v          # kolona ^* označava aktivan izvor
-timedatectl show-timesync   # ServerAddress mora biti popunjen
+chronyc sources -v
 ```
 
-Najčešći uzrok je zatvoren UDP port 123 ka izvoru. Ako rola `firewall` upravlja hostom, izlazni saobraćaj podrazumevano nije ograničen, ali proveri mrežu između hosta i NTP servera.
+Ako su svi izvori u stanju `?`, saobraćaj ne prolazi. Najčešći uzrok je zatvoren UDP port 123 ka izvoru. Rola `firewall` ne ograničava izlazni saobraćaj, pa proveri mrežu između hosta i NTP servera.
 
-**`chronyc` prijavlja izvore koje nisi zadao**
+**`chronyc` prijavljuje izvor koji nisi zadao**
 
-To su `pool` linije iz osnovnog `/etc/chrony/chrony.conf`. Uključi `role_timezone_chrony_disable_default_pools: true`.
+Znači da rola nije pokrenuta na tom hostu ili je konfiguracija posle toga ručno menjana. Pokreni `./apply.sh --limit <host> --check --diff` i pogledaj razliku.
 
 **Logovi i dalje pišu staro vreme**
 
@@ -230,3 +197,18 @@ Demon nije pročitao novu zonu. Dodaj ga u `role_timezone_restart_services` i po
 **Promena zone ne prolazi u kontejneru**
 
 `timedatectl` zahteva `systemd` i pisanje u `/etc/localtime`. U LXC/Docker okruženju bez `systemd`-a rola nije primenljiva — isključi je kroz `host_vars`.
+
+---
+
+## Izmene u odnosu na raniju verziju
+
+Ranija verzija je nudila izbor između `systemd-timesyncd` i `chrony`-ja, upisivala drop-in u `/etc/chrony/conf.d/99-ansible.conf` i imala poseban prekidač za gašenje podrazumevanih `pool` linija u osnovnom fajlu.
+
+Šta je s tim bilo loše:
+
+- Drop-in **dodaje** izvore, ne zamenjuje ih. Bez `disable_default_pools` host je pored zadatih izvora koristio i Ubuntu-ove, a spisak izvora se nije video na jednom mestu.
+- Gašenje `pool` linija se radilo modulom `replace` nad tuđim fajlom — krhko i teško za praćenje.
+- `conf.d` postoji tek od `chrony` 4.0, pa je rola morala da detektuje verziju i da puca na starijim sistemima.
+- Dva podržana demona znače dva šablona, mapu u `vars/main.yml` i grananje kroz cele taskove, a u praksi se koristio samo jedan.
+
+Nova verzija piše ceo fajl, podržava samo `chrony` i ima pet varijabli umesto devet. Fajl `templates/timesyncd.conf.j2` se briše iz repozitorijuma.
