@@ -1,208 +1,184 @@
 ---
 # roles/zabbix_proxy/defaults/main.yml
-#
-# Rola "zabbix_proxy" instalira i konfigurise Zabbix proxy.
-#
-# Aktivacija ide preko clanstva hosta u grupi [deploy_zabbix_proxy],
-# koja kroz group_vars/deploy_zabbix_proxy.yml postavlja
-# role_zabbix_proxy_enabled.
-#
-# PREDUSLOV: Zabbix repozitorijum — rola "repos", grupa [apply_repos].
-#
-# RAZLIKA U ODNOSU NA zabbix_server:
-# Proxy podrazumevano koristi SQLite, lokalnu bazu koju sam kreira
-# pri prvom pokretanju. Nije potrebna rola zabbix_db niti uvoz seme.
-# MySQL backend je opcija za proxy koji opsluzuje mnogo hostova.
-#
-# VAZNO: proxy se mora RUCNO dodati u Zabbix serveru
-# (Administration → Proxies) sa ISTIM imenom kao role_zabbix_proxy_hostname.
-# Bez toga server odbija podatke od proxy-ja.
 
+# ============================================================================
+# Rola: zabbix_proxy
+#
+# Instalira Zabbix proxy sa SQLite bazom i upisuje SVOJU konfiguraciju kao
+# drop-in fajl u /etc/zabbix/zabbix_proxy.d/, umesto da prepisuje glavni
+# konfiguracioni fajl.
+#
+# Zasto drop-in:
+#   - /etc/zabbix/zabbix_proxy.conf je dpkg conffile od preko hiljadu linija.
+#     Rola koja ga prepisuje pravi konflikt pri svakoj nadogradnji paketa i
+#     mora se dopunjavati za svaki parametar koji Zabbix uvede ili ukloni.
+#   - Zabbix obradjuje Include direktivu u trenutku kad je procita. Kada je
+#     Include na kraju glavnog fajla, vrednosti iz drop-ina nadjacavaju
+#     podrazumevane.
+#
+# Kao i kod servera, paket NEMA aktivnu Include liniju - sve su
+# zakomentarisane, sa upstream putanjom /usr/local/etc/. Rola je dodaje sama
+# (vidi role_zabbix_proxy_manage_include).
+#
+# SAMO SQLITE. MySQL i PostgreSQL backend su namerno izbaceni: trazili bi
+# pripremljenu bazu, uvoz seme i lozinke, sto je posao role zabbix_db.
+# SQLite bazu proxy kreira sam pri prvom pokretanju - rola samo priprema
+# folder sa ispravnim vlasnikom.
+#
+# VAZNO: proxy se mora RUCNO dodati u Zabbix serveru (Administration →
+# Proxies) sa ISTIM imenom kao role_zabbix_proxy_hostname i ISTIM rezimom
+# rada. Bez toga server odbija podatke, a greska nije ocigledna.
+# ============================================================================
 
-# =====================================================================
-# AKTIVACIJA
-# =====================================================================
+# ---------------------------------------------------------------------------
+# Aktivacija i paket
+# ---------------------------------------------------------------------------
 
+# Prekidac role. Postavlja ga group_vars/deploy_zabbix_proxy.yml.
 role_zabbix_proxy_enabled: false
 
-
-# =====================================================================
-# BACKEND BAZE
-# =====================================================================
-# sqlite3 — lokalna baza, kreira se sama (podrazumevano)
-# mysql   — MySQL/MariaDB, zahteva pripremljenu bazu
-# pgsql   — PostgreSQL
+# Zakovana verzija paketa. Prazno = najnovija iz repozitorijuma.
+#   role_zabbix_proxy_version: "1:7.0.9-1+ubuntu24.04"
+# Dostupne verzije: apt-cache madison zabbix-proxy-sqlite3
 #
-# SQLite je dovoljan za proxy do nekoliko stotina hostova. Iznad toga
-# upis u SQLite postaje usko grlo — tada predji na MySQL.
-#
-role_zabbix_proxy_db_backend: sqlite3
-
+# Verzija proxy-ja ne mora biti identicna verziji servera, ali ne sme biti
+# NOVIJA od nje. Stariji proxy uz noviji server radi u okviru iste glavne
+# verzije.
 role_zabbix_proxy_version: ""
 
-
-# =====================================================================
-# IME PROXY-JA
-# =====================================================================
-# OBAVEZNO se mora poklapati sa imenom proxy-ja upisanim u Zabbix
-# serveru. Ako se razlikuje, server odbija podatke i u logu proxy-ja
-# se pojavljuje poruka o nepoznatom proxy-ju.
+# ---------------------------------------------------------------------------
+# Identitet i veza sa serverom
 #
+# Ova tri parametra su izdvojena iz opsteg recnika namerno: bez njih proxy
+# nema smisla, pa nad njima postoji assert. Da su u recniku, korisnik koji u
+# group_vars definise role_zabbix_proxy_config potpuno bi zamenio
+# podrazumevani recnik (Ansible ne spaja recnike) i tiho ostao bez adrese
+# servera.
+# ---------------------------------------------------------------------------
+
+# Ime pod kojim se proxy predstavlja serveru.
+#
+# OBAVEZNO se mora poklapati sa imenom proxy-ja upisanim u Zabbix serveru.
+# Ako se razlikuje, server odbija podatke, a u logu proxy-ja stoji poruka o
+# nepoznatom proxy-ju.
 role_zabbix_proxy_hostname: "{{ inventory_hostname }}"
 
-
-# =====================================================================
-# VEZA SA SERVEROM
-# =====================================================================
-# OBAVEZNO. Rola prekida rad ako vrednost nije popunjena.
+# Adresa Zabbix servera kojem proxy pripada. OBAVEZNO.
 #
-# Adresa Zabbix servera kojem proxy pripada. Kod aktivnog rezima
-# proxy sam otvara vezu ka ovoj adresi.
+# U aktivnom rezimu proxy sam otvara vezu ka ovoj adresi.
+# U pasivnom rezimu ovo je spisak adresa sa kojih se prihvataju konekcije.
 #
+# Prihvata string ili listu; lista se spaja zarezima. Za HA klaster servera
+# cvorovi se u ovom parametru razdvajaju TACKOM-ZAREZOM:
+#   role_zabbix_proxy_server: "zbx-node1;zbx-node2"
 role_zabbix_proxy_server: ""
 
-
-# =====================================================================
-# REZIM RADA
-# =====================================================================
-# 0 = aktivan  — proxy sam zove server (podrazumevano)
-# 1 = pasivan  — server zove proxy
+# 0 = aktivan  - proxy sam zove server (podrazumevano)
+# 1 = pasivan  - server zove proxy
 #
-# Aktivan rezim je uobicajen: proxy je cesto iza NAT-a ili zastitnog
-# zida, pa je lakse da on otvara vezu. Pasivan koristi kada server
-# mora da kontrolise trenutak komunikacije.
+# Aktivan rezim je uobicajen: proxy je cesto iza NAT-a ili zastitnog zida, pa
+# je lakse da on otvara vezu, i tada mu ne treba otvoren dolazni port.
 #
 # PAZNJA: rezim se mora poklapati sa podesavanjem u Zabbix serveru.
-# Neuskladjen rezim znaci da komunikacije nema, bez jasne greske.
-#
+# Neuskladjen rezim znaci da komunikacije nema - bez jasne greske, samo
+# tisina.
 role_zabbix_proxy_mode: 0
 
+# ---------------------------------------------------------------------------
+# SQLite baza
+# ---------------------------------------------------------------------------
 
-# =====================================================================
-# MREZA
-# =====================================================================
-# Port na kojem proxy slusa. Koristi se u PASIVNOM rezimu; u aktivnom
-# proxy ne prima dolazne veze od servera.
+# Puna putanja do SQLite fajla. Proxy ga kreira sam pri prvom pokretanju.
 #
-role_zabbix_proxy_listen_port: 10051
-role_zabbix_proxy_listen_ip: ""
-
-# Adrese sa kojih se dozvoljava preuzimanje internih statistika.
-role_zabbix_proxy_stats_allowed_ip: "127.0.0.1"
-
-
-# =====================================================================
-# BAZA
-# =====================================================================
-# Za SQLite je DBName puna putanja do fajla. Folder mora postojati i
-# pripadati zabbix korisniku — rola to resava.
-#
+# Folder mora postojati i pripadati korisniku zabbix - rola to resava. Nije
+# dovoljno da fajl bude upisiv: SQLite pravi i pomocne fajlove (-journal,
+# -wal) u istom folderu, pa upis mora biti dozvoljen nad FOLDEROM.
 role_zabbix_proxy_db_name: /var/lib/zabbix/zabbix_proxy.sqlite3
 
-# Vazi samo za mysql i pgsql backend.
-role_zabbix_proxy_db_host: localhost
-role_zabbix_proxy_db_port: 3306
-role_zabbix_proxy_db_user: zabbix
-role_zabbix_proxy_db_password: ""
+# ---------------------------------------------------------------------------
+# Ostali parametri konfiguracije
+# ---------------------------------------------------------------------------
 
-
-# =====================================================================
-# CUVANJE PODATAKA
-# =====================================================================
-# Koliko dugo proxy cuva podatke koje jos nije poslao serveru, u
-# satima. Podrazumevano je 1 sat.
+# Slobodan recnik parametara koji se doslovno prepisuju u drop-in fajl.
+# Kljuc je ime Zabbix parametra (osetljivo na velika/mala slova), vrednost je
+# skalar ili lista. Lista se ispisuje kao vise linija sa istim kljucem.
 #
-# Povecaj ako veza ka serveru ume da bude prekinuta duze — proxy ce
-# sacuvati podatke i poslati ih kada se veza vrati. Cena je prostor
-# na disku i vece opterecenje baze.
+# Sve sto nije ovde nabrojano ostaje na vrednosti iz stock konfiguracije, pa
+# recnik drzi samo ono sto stvarno odstupa.
 #
-role_zabbix_proxy_offline_buffer: 1
-
-# Lokalni bafer. Podrazumevano 0 — podaci se brisu cim ih server
-# potvrdi. Vece vrednosti cuvaju podatke i posle slanja.
-role_zabbix_proxy_local_buffer: 0
-
-# Koliko cesto proxy salje podatke serveru, u sekundama.
-role_zabbix_proxy_data_sender_frequency: 1
-
-# Koliko cesto proxy preuzima konfiguraciju sa servera, u sekundama.
-# Manje vrednosti znace brze primenjene izmene, ali vise opterecuju
-# server.
-role_zabbix_proxy_config_frequency: 10
-
-
-# =====================================================================
-# LOGOVANJE
-# =====================================================================
-
-role_zabbix_proxy_logfile: /var/log/zabbix/zabbix_proxy.log
-role_zabbix_proxy_logfile_size: 10
-role_zabbix_proxy_debug_level: 3
-
-
-# =====================================================================
-# PROCESI
-# =====================================================================
-# Podrazumevane vrednosti odgovaraju malom proxy-ju (do ~100 hostova).
-
-role_zabbix_proxy_start_pollers: 5
-role_zabbix_proxy_start_pollers_unreachable: 1
-role_zabbix_proxy_start_trappers: 5
-role_zabbix_proxy_start_pingers: 1
-role_zabbix_proxy_start_discoverers: 1
-role_zabbix_proxy_start_http_pollers: 1
-role_zabbix_proxy_start_preprocessors: 3
-
-
-# =====================================================================
-# KESEVI
-# =====================================================================
-
-role_zabbix_proxy_cache_size: 32M
-role_zabbix_proxy_history_cache_size: 16M
-role_zabbix_proxy_history_index_cache_size: 4M
-
-
-# =====================================================================
-# PUTANJE
-# =====================================================================
-
-role_zabbix_proxy_external_scripts: /usr/lib/zabbix/externalscripts
-role_zabbix_proxy_fping_location: /usr/bin/fping
-role_zabbix_proxy_timeout: 4
-
-
-# =====================================================================
-# TLS
-# =====================================================================
-# Podrazumevano iskljuceno.
+# Primer za proxy sa vecim brojem hostova i losom vezom ka serveru:
+#   role_zabbix_proxy_config:
+#     ListenPort: 10051
+#     ProxyOfflineBuffer: 24
+#     CacheSize: 64M
+#     HistoryCacheSize: 32M
+#     StartPollers: 15
+#     StartPreprocessors: 5
+#     Timeout: 10
+#     StatsAllowedIP: "127.0.0.1,10.0.0.50"
 #
-# Vrednosti: unencrypted (podrazumevano), psk, cert
+# NAPOMENE:
+#   - ne koristi YAML true/false - Jinja ih ispisuje kao "True"/"False", sto
+#     Zabbix ne razume; koristi 0 i 1
+#   - parametri se izmedju Zabbix izdanja dodaju i uklanjaju; recnik znaci da
+#     rola ne mora da zna koji postoje u kojoj verziji, ali i da za ispravnost
+#     vrednosti odgovaras ti - neispravan parametar sprecava pokretanje
+#   - kljucevi Hostname, Server, ProxyMode, DBName, TLS* i Include su
+#     rezervisani i assert prekida ako se nadju ovde
+role_zabbix_proxy_config: {}
+
+# Slobodan tekst koji se dodaje na kraj drop-in fajla, doslovno.
 #
-# Isti identitet i kljuc moraju biti upisani i u Zabbix serveru, u
-# podesavanjima proxy-ja.
-#
-role_zabbix_proxy_tls_connect: unencrypted
-role_zabbix_proxy_tls_accept: unencrypted
-
-role_zabbix_proxy_tls_psk_identity: ""
-role_zabbix_proxy_tls_psk: ""
-role_zabbix_proxy_tls_psk_file: /etc/zabbix/zabbix_proxy.psk
-
-
-# =====================================================================
-# DODATNA KONFIGURACIJA
-# =====================================================================
 #   role_zabbix_proxy_extra_config: |
 #     StartSNMPTrapper=1
 #     SNMPTrapperFile=/var/log/snmptrap/snmptrap.log
-#
 role_zabbix_proxy_extra_config: ""
 
+# ---------------------------------------------------------------------------
+# TLS (PSK)
+# ---------------------------------------------------------------------------
 
-# =====================================================================
-# SERVIS
-# =====================================================================
+# Ako je role_zabbix_proxy_tls_psk neprazan, rola upisuje PSK fajl i dodaje
+# TLSConnect / TLSAccept / TLSPSKIdentity / TLSPSKFile u drop-in.
+#
+# PSK je heksadecimalni string od najmanje 32 znaka. Generise se sa:
+#   openssl rand -hex 32
+#
+# ISTI identitet i kljuc moraju biti upisani i u Zabbix serveru, u
+# podesavanjima ovog proxy-ja. Ako se razidju, veze nema.
+#
+# Vrednost pripada host_vars ili vault-u, nikako ovom fajlu.
+role_zabbix_proxy_tls_psk: ""
+
+# Identitet PSK-a. Ne sme biti tajna - salje se nesifrovano pri rukovanju.
+role_zabbix_proxy_tls_psk_identity: "PSK {{ inventory_hostname }}"
+
+# Putanja PSK fajla. Tajna ide u zaseban fajl sa mode 0600, ne u drop-in.
+role_zabbix_proxy_tls_psk_file: /etc/zabbix/zabbix_proxy.psk
+
+# ---------------------------------------------------------------------------
+# Drop-in mehanizam
+# ---------------------------------------------------------------------------
+
+# Direktorijum u koji ide drop-in. Za razliku od agenta, ovde se putanja NE
+# otkriva - paket je ne definise, pa je rola propisuje.
+role_zabbix_proxy_include_dir: /etc/zabbix/zabbix_proxy.d
+
+# Ime drop-in fajla. Prefiks "zz-" nema funkciju (Zabbix ne cita include
+# fajlove abecedno), ali jasno oznacava da je fajl pod tudjom upravom.
+role_zabbix_proxy_dropin_name: zz-ansible.conf
+
+# Kada je true, rola u glavnu konfiguraciju dodaje liniju
+#   Include=<role_zabbix_proxy_include_dir>/*.conf
+# na sam kraj fajla, u bloku sa Ansible markerima.
+#
+# To je JEDINA izmena glavnog fajla koju rola pravi. Bez nje drop-in nikada
+# ne bi bio ucitan, jer paket nema aktivnu Include direktivu.
+role_zabbix_proxy_manage_include: true
+
+# ---------------------------------------------------------------------------
+# Servis
+# ---------------------------------------------------------------------------
 
 role_zabbix_proxy_service_enabled: true
 role_zabbix_proxy_service_state: started
