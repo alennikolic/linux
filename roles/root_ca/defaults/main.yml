@@ -117,7 +117,7 @@ role_root_ca_key_curve: secp384r1
 
 # Algoritam potpisa.
 #
-role_root_ca_digest: sha256
+role_root_ca_digest: sha384
 
 # Kada se kljuc ponovo generise:
 #
