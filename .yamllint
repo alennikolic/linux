@@ -1,0 +1,88 @@
+---
+# .yamllint
+#
+# Podesavanja za yamllint. Cilj je da alat hvata prave greske, a ne
+# da se svadja sa namernim stilom ovog repozitorijuma.
+#
+# Rucno pokretanje na kontrolnom cvoru, ako ti treba pre commit-a:
+#   yamllint --strict .
+
+extends: default
+
+ignore: |
+  .git/
+  .venv/
+  venv/
+  # Jinja sabloni nisu YAML — {% if %} blokovi i {{ }} izrazi bi
+  # razbili parser. Njih pokriva ansible-lint kroz ucitavanje role.
+  *.j2
+
+rules:
+
+  # -------------------------------------------------------------------
+  # Ono zbog cega alat i postoji
+  # -------------------------------------------------------------------
+
+  # Dupli kljuc u defaults/main.yml je najopasnija tiha greska u ovom
+  # repozitorijumu: YAML uzme drugu vrednost, prvu odbaci, i nista ne
+  # prijavi. Ovo se NE iskljucuje.
+  key-duplicates: enable
+
+  # Tab u YAML-u je uvek greska.
+  trailing-spaces: enable
+
+  # -------------------------------------------------------------------
+  # Prilagodjeno stilu repozitorijuma
+  # -------------------------------------------------------------------
+
+  # Komentari u ovom projektu su obimni i objasnjavaju "zasto", pa
+  # linije ume da budu duze od podrazumevanih 80. 160 je gornja granica
+  # iznad koje fajl prestaje da bude citljiv u split ekranu.
+  # "warning" znaci da se prijavljuje, ali ne obara CI.
+  line-length:
+    max: 160
+    level: warning
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+
+  # playbook.yml koristi "become: yes", sto je legitiman YAML i
+  # uobicajen Ansible stil. Ne teramo prepravku 14 linija zbog
+  # kozmetike.
+  #
+  # check-keys: false je neophodan zbog GitHub Actions sintakse —
+  # kljuc "on:" YAML parser inace tumaci kao boolean True.
+  truthy:
+    allowed-values: ["true", "false", "yes", "no"]
+    check-keys: false
+
+  # Komentari uvucen na nivo bloka ispod njih su namerni u ovom
+  # projektu (blokovi sa ===== razdvajacima). Podrazumevano pravilo
+  # bi ih prijavljivalo kao pogresno uvucene.
+  comments-indentation: disable
+
+  # Minimum dva razmaka pre komentara na kraju linije je preterivanje
+  # za inline komentare u hosts.ini primerima i slicno.
+  comments:
+    min-spaces-from-content: 1
+    require-starting-space: true
+
+  # Svi YAML fajlovi u repozitorijumu pocinju sa "---". Zadrzavamo to.
+  document-start:
+    present: true
+
+  # Prazna vrednost je legitimna u aktivacionim fajlovima i
+  # placeholder varijablama.
+  empty-values: disable
+
+  # Uvlacenje: lista uvucena unutar kljuca je stil ovog projekta.
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+    check-multi-line-strings: false
+
+  # Vise praznih linija razdvaja sekcije u dugackim defaults fajlovima
+  # i to je namerno.
+  empty-lines:
+    max: 3
+    max-start: 0
+    max-end: 1
