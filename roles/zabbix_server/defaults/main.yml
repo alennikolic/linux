@@ -65,7 +65,7 @@ role_zabbix_server_db_user: zabbix
 
 # OBAVEZNO. Mora biti ISTA vrednost kao role_zabbix_db_password na hostu
 # baze. Pripada host_vars ili vault-u, nikako ovom fajlu.
-role_zabbix_server_db_password: ""
+role_zabbix_server_db_password: "zabbix"
 
 # Putanja do unix socket-a. Samo uz lokalnu bazu i samo ako podrazumevana
 # putanja ne odgovara.
