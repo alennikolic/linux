@@ -68,3 +68,17 @@
 #   ssh-keygen -t ed25519 -C "ansible@control"
 
 role_ansible_user_ssh_key: ""
+
+role_repos_list:
+  - name: zabbix
+    types:
+      - deb
+    uris: "https://repo.zabbix.com/zabbix/7.0/ubuntu"
+    suites: "{{ ansible_distribution_release }}"
+    components:
+      - main
+    signed_by: "https://repo.zabbix.com/zabbix-official-repo.key"
+    architectures:
+      - amd64
+    enabled: true
+    state: present
