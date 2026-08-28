@@ -333,8 +333,7 @@ Role koje menjaju stanje sistema nepovratno su kao takve označene na vrhu svog 
 ## Ažuriranje rola
 
 ```bash
-git -C /opt/ansible/linux fetch --tags
-git -C /opt/ansible/linux checkout v1.1.0
+git -C /opt/ansible/linux pull
 ```
 
 Konfiguracija se ne dira — kod i podaci su potpuno razdvojeni.
