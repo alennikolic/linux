@@ -88,10 +88,10 @@ role_zabbix_agent_package_state: present
 # ---------------------------------------------------------------------------
 
 # Adrese Zabbix servera ili proksija za PASIVNE provere (server pita agenta).
-role_zabbix_agent_server: ""
+role_zabbix_agent_server: "127.0.0.1"
 
 # Adrese za AKTIVNE provere (agent salje serveru).
-role_zabbix_agent_server_active: ""
+role_zabbix_agent_server_active: "127.0.0.1"
 
 # Sigurnosna brava: kada je false, rola prekida izvrsavanje ako se u
 # izracunatoj vrednosti Server parametra nadje tacka-zarez - bilo da je stigla
