@@ -47,8 +47,13 @@ role_packages_enabled: false
 # NAPOMENA: zakovana verzija sprecava nadogradnju kroz rolu "updates".
 # Koristi samo kada ti je to zaista namera.
 #
-role_packages_install: []
-
+#role_packages_install: []
+role_packages_install:
+  - htop
+  - nano
+  - curl
+  - wget
+  - net-tools
 
 # =====================================================================
 # PAKETI ZA UKLANJANJE
