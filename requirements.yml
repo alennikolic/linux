@@ -1,0 +1,64 @@
+---
+# requirements.yml
+#
+# Ansible kolekcije koje traze role iz ovog repozitorijuma.
+#
+# Instalacija na kontrolnom cvoru:
+#
+#   ansible-galaxy collection install -r requirements.yml
+#
+# Nadogradnja postojecih na najnovije dozvoljene verzije:
+#
+#   ansible-galaxy collection install -r requirements.yml --upgrade
+#
+# Provera sta je trenutno instalirano:
+#
+#   ansible-galaxy collection list
+#
+#
+# ZASTO SU VERZIJE ZADATE OPERATOROM ">=", A NE ZAKOVANE
+#
+# Zakovana verzija bi znacila da svaki kontrolni cvor mora imati tacno
+# tu, sto je nepotrebno strogo — kolekcije su unazad kompatibilne u
+# okviru glavne verzije. Donja granica je postavljena na verziju u
+# kojoj su moduli koje role koriste stabilni, a gornja na sledecu
+# glavnu verziju, jer promena glavne verzije po SemVer-u sme da nosi
+# nekompatibilnu izmenu.
+#
+# Ako u produkciji zelis potpuno predvidljivo ponasanje, zameni
+# opsege tacnim verzijama i zabelezi ih uz tag repozitorijuma.
+#
+#
+# NAPOMENA: ove kolekcije su ukljucene u pun "ansible" paket, ali NE
+# i u "ansible-core". Ako si Ansible instalirao kroz pip kao
+# ansible-core, ovaj fajl je obavezan korak.
+
+collections:
+
+  # Modul: authorized_key
+  # Role: ansible_user, users
+  - name: ansible.posix
+    version: ">=1.5.0,<3.0.0"
+
+  # Moduli: ufw, timezone
+  # Role: firewall, timezone
+  - name: community.general
+    version: ">=7.0.0,<12.0.0"
+
+  # Moduli: mysql_db, mysql_user, mysql_query, mysql_variables
+  # Role: zabbix_db
+  #
+  # Na CILJNOM hostu je potreban i python3-pymysql; rola zabbix_db ga
+  # instalira sama.
+  - name: community.mysql
+    version: ">=3.5.0,<4.0.0"
+
+  # Moduli: openssl_privatekey, openssl_csr, x509_certificate,
+  #         x509_certificate_info
+  # Role: root_ca, zabbix_web (self-signed sertifikat)
+  #
+  # Na CILJNOM hostu je potrebna Python biblioteka cryptography;
+  # rola root_ca je instalira sama, rola zabbix_web ocekuje da je
+  # vec prisutna ili da self-signed nije ukljucen.
+  - name: community.crypto
+    version: ">=2.15.0,<4.0.0"
