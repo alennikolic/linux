@@ -64,6 +64,59 @@ role_root_ca_basename: ca
 
 
 # =====================================================================
+# UVOZ POSTOJECEG CA
+# =====================================================================
+# Preuzimanje CA koji je napravljen ranije — rucno, starijom verzijom
+# ove role, ili nekim drugim alatom. Rola ga ne pravi iznova, nego
+# nastavlja da izdaje sertifikate postojecim kljucem.
+#
+# Ovo je jednokratna operacija. Kada su fajlovi jednom na mestu, uvoz
+# se preskace pri svakom sledecem pokretanju (postojece se NE
+# prepisuje). Ostavljanje role_root_ca_import_enabled na true nije
+# greska — samo nema efekta.
+#
+# Rola proverava da uvezeni kljuc i sertifikat pripadaju jedno
+# drugom. Neusaglasen par bi izdavao sertifikate koje nijedan klijent
+# ne bi prihvatio, a greska bi se pojavila tek na klijentu.
+#
+# Primer uvoza sa kontrolnog cvora:
+#
+#   role_root_ca_import_enabled: true
+#   role_root_ca_import_key_src:  /opt/ansible/production/files/pki/ca.key.pem
+#   role_root_ca_import_cert_src: /opt/ansible/production/files/pki/ca.cert.pem
+#
+# Primer uvoza iz fajlova koji su vec na CA hostu (npr. stara
+# instalacija u /root/ca sa .pem ekstenzijama):
+#
+#   role_root_ca_import_enabled: true
+#   role_root_ca_import_remote: true
+#   role_root_ca_import_key_src:  /root/ca/private/ca.key.pem
+#   role_root_ca_import_cert_src: /root/ca/certs/ca.cert.pem
+#
+# PAZNJA: posle uvoza obavezno uskladi role_root_ca_key_type,
+# role_root_ca_key_curve i role_root_ca_digest sa onim sto uvezeni CA
+# zaista jeste, kao i subject polja. Rola ispisuje upozorenje ako se
+# tip kljuca ne poklapa.
+#
+role_root_ca_import_enabled: false
+
+# Kada je true, putanje ispod se odnose na CA host. Kada je false, na
+# kontrolni cvor.
+#
+role_root_ca_import_remote: false
+
+role_root_ca_import_key_src: ""
+role_root_ca_import_cert_src: ""
+
+# Prepisivanje postojecih fajlova pri uvozu. Podrazumevano iskljuceno
+# — uvoz preko zivog CA bi obesmislio sve sto je do tada izdato.
+#
+# Ukljucuj samo svesno i uz prethodnu arhivu foldera.
+#
+role_root_ca_import_force: false
+
+
+# =====================================================================
 # IDENTITET CA
 # =====================================================================
 # Prazna polja se ne upisuju u sertifikat.
@@ -96,6 +149,24 @@ role_root_ca_days: 7300
 #
 role_root_ca_warn_before_days: 90
 
+# Zastita postojeceg CA sertifikata.
+#
+# Kada je true (podrazumevano), rola CA sertifikat pravi samo ako ga
+# nema. Postojeci ne dira — ni kad se parametri u konfiguraciji
+# razlikuju od onoga sto je u sertifikatu.
+#
+# Zasto je ovo potrebno: modul x509_certificate poredi sertifikat sa
+# CSR-om. CSR koji rola pravi sadrzi pathlen:0 i subjectKeyIdentifier.
+# CA napravljen rucno ili starijom verzijom role ih po pravilu nema,
+# pa bi modul zakljucio da se razlikuju i napravio NOV CA sertifikat.
+# Kljuc bi ostao isti i lancanje se ne bi prekinulo, ali bi se ca.crt
+# promenio i morao redistribuirati svuda gde je vec instaliran.
+#
+# Iskljuci samo kada svesno zelis da CA sertifikat bude ponovo
+# napravljen po tekucoj konfiguraciji.
+#
+role_root_ca_preserve_cert: true
+
 
 # =====================================================================
 # KLJUC CA
@@ -104,7 +175,7 @@ role_root_ca_warn_before_days: 90
 # RSA ili ECC. ECC daje krace kljuceve i brze rukovanje, ali stariji
 # klijenti i pokoji uredjaj ga ne podrzavaju. RSA je bezbedan izbor.
 #
-role_root_ca_key_type: ECC
+role_root_ca_key_type: RSA
 
 # Duzina RSA kljuca. Za ECC se ignorise; koristi se
 # role_root_ca_key_curve.
@@ -117,7 +188,7 @@ role_root_ca_key_curve: secp384r1
 
 # Algoritam potpisa.
 #
-role_root_ca_digest: sha384
+role_root_ca_digest: sha256
 
 # Kada se kljuc ponovo generise:
 #
@@ -135,6 +206,12 @@ role_root_ca_key_regenerate: never
 # SERTIFIKATI KOJE CA IZDAJE
 # =====================================================================
 # Lista sertifikata. Jedino obavezno polje je cn.
+#
+# Kod ovih unosa CA pravi i privatni kljuc. Kljuc nastaje na CA hostu
+# i mora se odatle preneti do servisa koji ga koristi — sto je
+# najslabija tacka ovog toka. Kada je moguce, koristi radije
+# role_root_ca_signed_csrs (vidi nize): tamo kljuc nastaje na hostu
+# kojem pripada i nikada ga ne napusta.
 #
 #   role_root_ca_issued_certs:
 #     - cn: zabbix.example.com
@@ -228,6 +305,74 @@ role_root_ca_fullchain: true
 
 
 # =====================================================================
+# POTPISIVANJE SPOLJNIH CSR-ova
+# =====================================================================
+# Drugi, sigurniji tok: privatni kljuc se pravi na hostu kojem
+# pripada, tamo se pravi i zahtev (CSR), a CA host dobija samo CSR i
+# vraca potpisan sertifikat. Privatni kljuc nikada ne napusta svoj
+# host i nikada ne prolazi kroz kontrolni cvor.
+#
+# CSR na strani servera:
+#
+#   openssl req -new -newkey rsa:2048 -nodes \
+#     -keyout /etc/ssl/private/app-01.key \
+#     -out /tmp/app-01.csr \
+#     -subj "/CN=app-01.example.com" \
+#     -addext "subjectAltName=DNS:app-01.example.com,IP:10.0.0.11" \
+#     -addext "basicConstraints=critical,CA:FALSE" \
+#     -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+#     -addext "extendedKeyUsage=serverAuth"
+#
+# Zatim se .csr fajl prenese na kontrolni cvor i navede ovde.
+#
+#   role_root_ca_signed_csrs:
+#     - src: /opt/ansible/production/files/csr/app-01.csr
+#       filename: app-01
+#
+#     - src: /opt/ansible/production/files/csr/vpn-gw.csr
+#       filename: vpn-gw
+#       days: 730
+#
+#     - remote_src: /tmp/hitno.csr
+#       filename: hitno
+#
+#     - filename: ukinut
+#       state: absent
+#
+# Podrzana polja:
+#
+#   src         — putanja do CSR-a na KONTROLNOM CVORU
+#   remote_src  — putanja do CSR-a na CA HOSTU (alternativa za src)
+#   filename    — osnovno ime fajlova (obavezno)
+#   state       — present (podrazumevano) ili absent
+#   days        — nadjacava role_root_ca_signed_days
+#   owner       — vlasnik sertifikata
+#   group       — grupa sertifikata
+#   mode        — dozvole nad sertifikatom
+#
+# PAZNJA — ekstenzije dolaze iz CSR-a:
+#
+#   Kod ovog toka rola ne odlucuje o keyUsage, extendedKeyUsage ni
+#   basicConstraints — preuzimaju se iz zahteva onako kako ih je
+#   napravila druga strana. CSR bez tih ekstenzija daje sertifikat bez
+#   njih, sto pokoji klijent odbija. Rola prekida rad ako CSR nema
+#   SAN, i upozorava ako nema extendedKeyUsage.
+#
+role_root_ca_signed_csrs: []
+
+# Vazenje sertifikata potpisanih iz spoljnog CSR-a.
+#
+role_root_ca_signed_days: 397
+
+# Vlasnistvo i dozvole. Privatnog kljuca ovde nema — sertifikat je
+# javan podatak, pa je 0644 u redu.
+#
+role_root_ca_signed_owner: root
+role_root_ca_signed_group: root
+role_root_ca_signed_mode: '0644'
+
+
+# =====================================================================
 # POVERENJE NA SAMOM CA HOSTU
 # =====================================================================
 # Upisuje CA sertifikat u sistemski trust store ovog hosta i pokrece
@@ -250,9 +395,13 @@ role_root_ca_trust_filename: internal-root-ca
 # Ovom opcijom se preuzimaju u folder na kontrolnom cvoru, odakle se
 # dalje distribuiraju.
 #
-# PAZNJA: preuzimaju se i privatni kljucevi izdatih sertifikata.
-# Ciljni folder mora biti izvan git repozitorijuma i sa dozvolama
-# 0700. Kljuc samog CA se NE preuzima nikada.
+# PAZNJA: preuzimaju se i privatni kljucevi sertifikata iz
+# role_root_ca_issued_certs. Ciljni folder mora biti izvan git
+# repozitorijuma i sa dozvolama 0700. Kljuc samog CA se NE preuzima
+# nikada.
+#
+# Sertifikati iz role_root_ca_signed_csrs nemaju privatni kljuc na CA
+# hostu, pa se preuzima samo .crt — to je javan podatak.
 #
 role_root_ca_fetch_enabled: false
 role_root_ca_fetch_dir: /opt/ansible/production/files/pki
