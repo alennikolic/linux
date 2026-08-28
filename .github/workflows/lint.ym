@@ -1,0 +1,165 @@
+---
+# .github/workflows/lint.yml
+#
+# Automatska provera koda pri svakom commit-u i pull request-u.
+#
+# Sta ovaj workflow radi:
+#   1. yamllint        — da li su fajlovi validan YAML
+#   2. ansible-lint    — da li su validan Ansible
+#   3. --syntax-check  — da li se playbook-ovi uopste ucitavaju
+#
+# Sta NE radi: ne pokrece nijednu rolu, ne dodiruje nijedan server,
+# ne menja nista u repozitorijumu. Ovo je pravopisna provera, ne test.
+#
+# Rezultat se vidi kao zelena kvacica ili crveni krstic pored commit-a,
+# i u tabu "Actions". Kada pukne, stize mejl.
+#
+# PRAVILO: kada je crveno, ne radi "git pull" na kontrolnom cvoru.
+
+name: Lint
+
+# Pokretanje pri svakoj izmeni koda. Izmene koje diraju samo
+# dokumentaciju se preskacu — nema sta da se linta u README-u, a
+# svaki prolaz zauzima minut i pravi buku u istoriji.
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  # Rucno pokretanje iz interfejsa, kada treba proveriti bez commit-a.
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: YAML i Ansible provere
+    runs-on: ubuntu-latest
+
+    env:
+      # Role su u roles/ u korenu repozitorijuma. Bez ovoga
+      # --syntax-check ne bi nasao nijednu rolu iz playbook-a, jer
+      # ansible.cfg iz radnog foldera ovde ne postoji — on zivi na
+      # kontrolnom cvoru, van git-a.
+      ANSIBLE_ROLES_PATH: ${{ github.workspace }}/roles
+      # Ispis bez boja je citljiviji u logu Actions-a.
+      ANSIBLE_FORCE_COLOR: "0"
+      # Nema smisla proveravati host kljuceve — nema hostova.
+      ANSIBLE_HOST_KEY_CHECKING: "False"
+
+    steps:
+
+      - name: Preuzimanje repozitorijuma
+        uses: actions/checkout@v4
+
+      - name: Priprema Python okruzenja
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Verzija ansible-core je zakovana na donju granicu koju
+      # repozitorijum trazi (2.15, zbog deb822_repository). Ako se
+      # ovde pusti "najnovije", CI moze poceti da prolazi na verziji
+      # koju kontrolni cvor nema — sto je gore od crvenog krstica.
+      - name: Instalacija alata
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "ansible-core>=2.15,<2.19" \
+            "ansible-lint>=24.0" \
+            "yamllint>=1.35"
+
+      # Kolekcije su neophodne: bez njih ansible-lint ne moze da
+      # razresi module poput community.mysql.mysql_db i prijavljuje
+      # lazne greske o nepostojecem modulu.
+      - name: Instalacija Ansible kolekcija
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Verzije alata
+        run: |
+          ansible --version
+          ansible-lint --version
+          yamllint --version
+
+      # -----------------------------------------------------------------
+      # 1. YAML
+      # -----------------------------------------------------------------
+      # Najkorisniji nalaz ovde su duplirani kljucevi. Ako u
+      # defaults/main.yml dvaput napises istu varijablu, YAML tiho
+      # uzme drugu vrednost i nikada ne prijavi gresku.
+
+      - name: yamllint
+        run: yamllint --strict .
+
+      # -----------------------------------------------------------------
+      # 2. Ansible
+      # -----------------------------------------------------------------
+      # continue-on-error je PRIVREMEN. Prvi prolaz nad postojecim
+      # kodom ce prijaviti stavke koje treba prodji jednom i odluciti
+      # sta se ispravlja, a sta iskljucuje u .ansible-lint.
+      #
+      # Kada spisak bude prazan, OBRISI liniju continue-on-error —
+      # inace ansible-lint prijavljuje, ali nista ne zaustavlja, a
+      # provera koja nikada ne pada nije provera.
+
+      - name: ansible-lint
+        continue-on-error: true
+        run: ansible-lint
+
+      # -----------------------------------------------------------------
+      # 3. Sintaksa playbook-ova
+      # -----------------------------------------------------------------
+      # Hvata rolu dodatu u playbook.yml bez kreiranog foldera, i
+      # obrnuto. Prazan inventory je dovoljan — provera se ne povezuje
+      # ni na jedan host, samo ucitava strukturu.
+
+      - name: Provera sintakse playbook-ova
+        run: |
+          echo "localhost ansible_connection=local" > /tmp/hosts.ini
+          ansible-playbook -i /tmp/hosts.ini playbooks/playbook.yml --syntax-check
+          ansible-playbook -i /tmp/hosts.ini playbooks/bootstrap.yml --syntax-check
+
+      # -----------------------------------------------------------------
+      # 4. Provera potpunosti (koraci 9 i 10 iz README-a)
+      # -----------------------------------------------------------------
+      # Grupa bez pripadajuceg group_vars fajla nece aktivirati rolu, a
+      # Ansible to NECE prijaviti kao gresku. Host bi tiho ostao bez
+      # role. Ovo je jedina provera u workflow-u koja je specificna za
+      # ovaj repozitorijum, i verovatno najkorisnija.
+
+      - name: Svaka grupa iz hosts.ini.example ima group_vars fajl
+        run: |
+          set -euo pipefail
+          example="bootstrap/template/inventory/hosts.ini.example"
+          gvdir="bootstrap/template/inventory/group_vars"
+          rc=0
+
+          # Grupe se citaju iz zaglavlja [ime]. Preskacu se [all],
+          # semanticke grupe bez prefiksa i :children sekcije.
+          grupe=$(grep -oP '^\[\K[a-z_]+(?=\]$)' "$example" \
+                  | grep -E '^(apply_|deploy_|bootstrap$)' || true)
+
+          for g in $grupe; do
+            if [[ ! -f "$gvdir/$g.yml" ]]; then
+              echo "GRESKA: grupa [$g] postoji u hosts.ini.example, ali" >&2
+              echo "        $gvdir/$g.yml ne postoji." >&2
+              rc=1
+            fi
+          done
+
+          for f in "$gvdir"/*.yml; do
+            base=$(basename "$f" .yml)
+            [[ "$base" == "all" ]] && continue
+            if ! grep -q "^\[$base\]$" "$example"; then
+              echo "GRESKA: $f postoji, ali grupa [$base] nije u" >&2
+              echo "        hosts.ini.example." >&2
+              rc=1
+            fi
+          done
+
+          [[ $rc -eq 0 ]] && echo "Sve grupe imaju pripadajuci group_vars fajl."
+          exit $rc
