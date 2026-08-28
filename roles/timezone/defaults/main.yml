@@ -44,7 +44,7 @@ role_timezone_enabled: false
 #
 #   role_timezone_name: Europe/Belgrade
 #
-role_timezone_name: Etc/UTC
+role_timezone_name: Europe/Belgrade
 
 # Servisi koje treba restartovati POSLE promene zone.
 #
