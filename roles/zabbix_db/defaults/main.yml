@@ -93,7 +93,7 @@ role_zabbix_db_server_user: zabbix
 # lozinka nikada ne ulazi u istoriju verzija. Fajl treba da ima
 # dozvole 0600.
 #
-role_zabbix_db_password: ""
+role_zabbix_db_password: "zabbix"
 
 # Lista hostova sa kojih se Zabbix SERVER sme prijaviti na bazu.
 #
