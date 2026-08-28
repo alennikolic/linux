@@ -132,6 +132,12 @@
 #
 # Otisak javnog kljuca je najpouzdanije poredjenje: radi jednako za
 # RSA i za ECC.
+- name: "Citanje uvezenog CA kljuca"
+  community.crypto.openssl_privatekey_info:
+    path: "{{ _root_ca_key }}"
+  register: _root_ca_import_key_info
+  no_log: true
+
 
 
 - name: "Citanje uvezenog CA sertifikata"
