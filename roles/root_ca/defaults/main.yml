@@ -104,7 +104,7 @@ role_root_ca_warn_before_days: 90
 # RSA ili ECC. ECC daje krace kljuceve i brze rukovanje, ali stariji
 # klijenti i pokoji uredjaj ga ne podrzavaju. RSA je bezbedan izbor.
 #
-role_root_ca_key_type: RSA
+role_root_ca_key_type: ECC
 
 # Duzina RSA kljuca. Za ECC se ignorise; koristi se
 # role_root_ca_key_curve.
