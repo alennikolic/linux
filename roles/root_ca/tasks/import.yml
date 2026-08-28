@@ -1,0 +1,179 @@
+---
+# roles/root_ca/tasks/import.yml
+#
+# Uvoz postojeceg CA — kljuca i sertifikata napravljenih ranije, van
+# ove role. Poziva se iz tasks/main.yml, pre koraka koji prave kljuc.
+#
+# Tok:
+#   1. Provere ulaznih podataka
+#   2. Da li ciljni fajlovi vec postoje
+#   3. Kopiranje
+#   4. Provera da kljuc i sertifikat pripadaju jedno drugom
+#   5. Prikaz onoga sto je uvezeno
+#
+# Uvoz je jednokratan. Kada su fajlovi na mestu, sledeci prolaz ovde
+# ne radi nista — sto znaci da role_root_ca_import_enabled moze
+# ostati ukljucen bez posledica.
+
+# ---------------------------------------------------------------------
+# 1. Provere
+# ---------------------------------------------------------------------
+
+- name: "Provera da su izvorne putanje popunjene"
+  ansible.builtin.assert:
+    that:
+      - role_root_ca_import_key_src | length > 0
+      - role_root_ca_import_cert_src | length > 0
+    fail_msg: >-
+      role_root_ca_import_enabled je ukljucen, ali
+      role_root_ca_import_key_src ili role_root_ca_import_cert_src
+      nisu popunjeni. Navedi putanje do postojeceg CA kljuca i
+      sertifikata. Ako su fajlovi na samom CA hostu, postavi i
+      role_root_ca_import_remote: true.
+    success_msg: "Izvorne putanje zadate."
+
+# ---------------------------------------------------------------------
+# 2. Da li ciljni fajlovi vec postoje
+# ---------------------------------------------------------------------
+# Prepisivanje zivog CA bi obesmislilo sve sto je do tada izdato, pa
+# se radi samo na izricit zahtev.
+
+- name: "Provera postojeceg CA kljuca"
+  ansible.builtin.stat:
+    path: "{{ _root_ca_key }}"
+  register: _root_ca_import_key_stat
+  changed_when: false
+
+- name: "Provera postojeceg CA sertifikata"
+  ansible.builtin.stat:
+    path: "{{ _root_ca_crt }}"
+  register: _root_ca_import_crt_stat
+  changed_when: false
+
+- name: "Odluka o uvozu"
+  ansible.builtin.set_fact:
+    _root_ca_do_import: >-
+      {{ role_root_ca_import_force | bool
+         or not (_root_ca_import_key_stat.stat.exists
+                 and _root_ca_import_crt_stat.stat.exists) }}
+
+- name: "Uvoz se preskace — CA je vec na mestu"
+  ansible.builtin.debug:
+    msg: >-
+      CA kljuc i sertifikat vec postoje u {{ role_root_ca_dir }}.
+      Uvoz se preskace. Ako zaista zelis da ih zamenis, arhiviraj
+      folder i postavi role_root_ca_import_force: true.
+  when: not _root_ca_do_import | bool
+
+# ---------------------------------------------------------------------
+# 3. Kopiranje
+# ---------------------------------------------------------------------
+# Dva zasebna taska umesto jednog sa uslovom, jer se remote_src ne
+# moze uslovno izostaviti kroz omit na nacin koji ostaje citljiv.
+
+- name: "Uvoz CA — fajlovi sa kontrolnog cvora"
+  when:
+    - _root_ca_do_import | bool
+    - not role_root_ca_import_remote | bool
+  block:
+
+    - name: "Uvoz CA kljuca sa kontrolnog cvora"
+      ansible.builtin.copy:
+        src: "{{ role_root_ca_import_key_src }}"
+        dest: "{{ _root_ca_key }}"
+        owner: root
+        group: root
+        mode: '0600'
+        backup: true
+      no_log: true
+
+    - name: "Uvoz CA sertifikata sa kontrolnog cvora"
+      ansible.builtin.copy:
+        src: "{{ role_root_ca_import_cert_src }}"
+        dest: "{{ _root_ca_crt }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+
+- name: "Uvoz CA — fajlovi sa samog CA hosta"
+  when:
+    - _root_ca_do_import | bool
+    - role_root_ca_import_remote | bool
+  block:
+
+    - name: "Uvoz CA kljuca sa hosta"
+      ansible.builtin.copy:
+        src: "{{ role_root_ca_import_key_src }}"
+        dest: "{{ _root_ca_key }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+        backup: true
+      no_log: true
+
+    - name: "Uvoz CA sertifikata sa hosta"
+      ansible.builtin.copy:
+        src: "{{ role_root_ca_import_cert_src }}"
+        dest: "{{ _root_ca_crt }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+
+# ---------------------------------------------------------------------
+# 4. Da li kljuc i sertifikat pripadaju jedno drugom
+# ---------------------------------------------------------------------
+# Neusaglasen par ne bi izazvao gresku ovde. Rola bi uredno "izdavala"
+# sertifikate, a klijenti bi ih odbijali porukom o neispravnom
+# potpisu — daleko od mesta gde je greska nastala.
+#
+# Otisak javnog kljuca je najpouzdanije poredjenje: radi jednako za
+# RSA i za ECC.
+
+- name: "Citanje uvezenog CA kljuca"
+  community.crypto.openssl_privatekey_info:
+    path: "{{ _root_ca_key }}"
+  register: _root_ca_import_key_info
+  no_log: true
+
+- name: "Citanje uvezenog CA sertifikata"
+  community.crypto.x509_certificate_info:
+    path: "{{ _root_ca_crt }}"
+  register: _root_ca_import_crt_info
+
+- name: "Potvrda da kljuc odgovara sertifikatu"
+  ansible.builtin.assert:
+    that:
+      - _root_ca_import_key_info.public_key_fingerprints.sha256
+        == _root_ca_import_crt_info.public_key_fingerprints.sha256
+    fail_msg: >-
+      Uvezeni CA kljuc i sertifikat NE pripadaju jedno drugom —
+      otisci javnog kljuca se razlikuju. Sertifikati potpisani ovim
+      parom bili bi odbijeni na svakom klijentu. Proveri da li si
+      naveo kljuc i sertifikat iz istog generisanja.
+    success_msg: "Kljuc i sertifikat pripadaju jedno drugom."
+
+# Tip kljuca se ne proverava assert-om jer sa regenerate: never nema
+# stete — modul postojeci kljuc ne dira ni kada se parametri
+# razlikuju. Ali neslaganje je znak da konfiguracija ne opisuje
+# stvarno stanje, pa se prijavljuje.
+- name: "UPOZORENJE: tip kljuca se ne poklapa sa konfiguracijom"
+  ansible.builtin.debug:
+    msg: >-
+      Uvezeni CA kljuc je tipa
+      '{{ _root_ca_import_key_info.type }}', a role_root_ca_key_type
+      je '{{ role_root_ca_key_type }}'. Sa regenerate: never nema
+      neposredne stete, ali uskladi vrednost u group_vars — inace
+      konfiguracija ne opisuje ono sto je na disku.
+  when: _root_ca_import_key_info.type != role_root_ca_key_type
+
+- name: "Uvezeni CA"
+  ansible.builtin.debug:
+    msg: >-
+      Uvezen CA '{{ _root_ca_import_crt_info.subject.commonName | default("bez CN") }}',
+      vazi do {{ _root_ca_import_crt_info.not_after }}.
+      Uskladi role_root_ca_common_name i ostala subject polja sa ovim
+      vrednostima, inace ce naredna provera identiteta prekinuti rad.
