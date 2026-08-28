@@ -1,3 +1,4 @@
+<!-- README.md -->
 # linux
 
 Kolekcija Ansible rola za centralizovano upravljanje Linux serverima.
@@ -12,23 +13,30 @@ Repozitorijum sadrži **isključivo kod** — role, playbook-ove i inicijalni sc
 linux/
 ├── roles/
 │   ├── ansible_user/             # priprema sveze instaliranog servera
+│   ├── timezone/                 # vremenska zona i chrony
 │   ├── banner/                   # /etc/motd, /etc/issue
+│   ├── etc_hosts/                # unosi u /etc/hosts
+│   ├── users/                    # nalozi, grupe, SSH kljucevi, sudo
 │   ├── repos/                    # APT repozitorijumi
 │   ├── packages/                 # instalacija i uklanjanje paketa
 │   ├── updates/                  # azuriranje sistema
 │   ├── firewall/                 # UFW pravila
+│   ├── root_ca/                  # lokalni CA i izdavanje sertifikata
 │   ├── zabbix_agent/
 │   ├── zabbix_db/
 │   ├── zabbix_server/
 │   ├── zabbix_web/
-│   └── zabbix_proxy/
+│   ├── zabbix_proxy/
+│   └── zabbix_webdriver/         # Selenium u Dockeru, za browser stavke
 ├── playbooks/
 │   ├── playbook.yml              # svakodnevni rad, sve role
 │   └── bootstrap.yml             # jednokratna priprema novog servera
 ├── bootstrap/
 │   ├── init.sh                   # inicijalizacija radnog foldera
 │   └── template/                 # šablon konfiguracije
+├── requirements.yml              # Ansible kolekcije
 ├── .gitignore
+├── LICENSE
 └── README.md
 ```
 
@@ -133,28 +141,30 @@ dbservers
 **Na kontrolnom čvoru:**
 
 - `ansible-core` **2.15 ili noviji** — rola `repos` koristi modul `deb822_repository`, dodat u toj verziji
-- Tri kolekcije:
+- Četiri kolekcije:
 
 ```bash
-  ansible-galaxy collection install ansible.posix community.general community.mysql
+ansible-galaxy collection install -r requirements.yml
 ```
 
-  | Kolekcija | Koristi je |
+  | Kolekcija | Koriste je role |
   |---|---|
-  | `ansible.posix` | `ansible_user` (SSH ključevi) |
-  | `community.general` | `firewall` (UFW) |
+  | `ansible.posix` | `ansible_user`, `users` (SSH ključevi) |
+  | `community.general` | `firewall` (UFW), `timezone` |
   | `community.mysql` | `zabbix_db` |
+  | `community.crypto` | `root_ca`, `zabbix_web` (self-signed sertifikat) |
 
 - SSH ključni par; ako ne postoji:
 
 ```bash
-  ssh-keygen -t ed25519 -C "ansible@control"
+ssh-keygen -t ed25519 -C "ansible@control"
 ```
 
 **Na ciljnim sistemima:**
 
 - Ubuntu 22.04 ili noviji, odnosno Debian 12+ — `apt` 2.4+ zbog `.sources` formata
 - SSH pristup i `sudo` privilegije
+- Docker Engine — **samo** za rolu `zabbix_webdriver`, koja ga namerno ne instalira sama
 
 ---
 
@@ -182,7 +192,22 @@ mkdir -p /opt/ansible && cd /opt/ansible
 git clone https://github.com/<korisnik>/linux.git
 ```
 
-### 2. Inicijalizuj radni folder
+Za produkciju preporuka je da radiš nad **tagom**, ne nad granom `main`:
+
+```bash
+cd linux
+git checkout v1.0.0
+```
+
+Time se izbegava da rutinski `git pull` neplanirano izmeni ponašanje rola nad živim serverima.
+
+### 2. Instaliraj kolekcije
+
+```bash
+ansible-galaxy collection install -r linux/requirements.yml
+```
+
+### 3. Inicijalizuj radni folder
 
 ```bash
 bash linux/bootstrap/init.sh /opt/ansible/production
@@ -196,7 +221,7 @@ Skripta kopira šablon iz `bootstrap/template/`, upiše putanje ka repozitorijum
 
 Skripta namerno **ne** pokreće `git init` u ciljnom folderu. Ako želiš da versioniraš svoju konfiguraciju, uradi to svesno i isključivo ka privatnom remote-u.
 
-### 3. Upiši SSH ključ kontrolnog čvora
+### 4. Upiši SSH ključ kontrolnog čvora
 
 ```bash
 cd /opt/ansible/production
@@ -211,7 +236,7 @@ role_ansible_user_ssh_key: "ssh-ed25519 AAAAC3Nz... ansible@control"
 
 > `all.yml` je jedini fajl u `group_vars/` koji se popunjava. Ostali su aktivacioni i ne diraju se.
 
-### 4. Popuni inventory
+### 5. Popuni inventory
 
 ```bash
 mv inventory/hosts.ini.example inventory/hosts.ini
@@ -227,14 +252,28 @@ Sveže instaliran server još nema nalog pod kojim se Ansible povezuje. Zato prv
 
 Ovaj playbook se **ne** pokreće kroz `apply.sh`.
 
-**1.** Dodaj host u grupu `[bootstrap]`:
+**1.** Prihvati SSH host ključ.
+
+`ansible.cfg` ima `host_key_checking = True`, što znači da prvo povezivanje na nepoznat host **pada** dok njegov ključ nije u `known_hosts`. To je namerno — tiho prihvatanje ključa je tiho prihvatanje čoveka u sredini.
+
+```bash
+ssh-keyscan -H srv-web-01 >> ~/.ssh/known_hosts
+```
+
+Otisak uporedi sa onim koji server ispiše na konzoli:
+
+```bash
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+**2.** Dodaj host u grupu `[bootstrap]`:
 
 ```ini
 [bootstrap]
 srv-web-01
 ```
 
-**2.** Pokreni pripremu:
+**3.** Pokreni pripremu:
 
 ```bash
 cd /opt/ansible/production
@@ -250,7 +289,7 @@ ansible-playbook ../linux/playbooks/bootstrap.yml \
 | sudo korisnik sa lozinkom | `--user admin --ask-pass --ask-become-pass` |
 | cloud-init sa ključem | `--user ubuntu` |
 
-**3.** Proveri da ključ i sudo rade:
+**4.** Proveri da ključ i sudo rade:
 
 ```bash
 ssh ansible@srv-web-01 sudo whoami
@@ -258,7 +297,7 @@ ssh ansible@srv-web-01 sudo whoami
 
 Očekivani izlaz je `root`, bez pitanja za lozinku.
 
-**4.** Ukloni host iz `[bootstrap]` i upiši ga u grupe rola koje treba da dobije.
+**5.** Ukloni host iz `[bootstrap]` i upiši ga u grupe rola koje treba da dobije.
 
 Detalji su u [`roles/ansible_user/README.md`](roles/ansible_user/README.md).
 
@@ -294,12 +333,13 @@ Role koje menjaju stanje sistema nepovratno su kao takve označene na vrhu svog 
 ## Ažuriranje rola
 
 ```bash
-git -C /opt/ansible/linux pull
+git -C /opt/ansible/linux fetch --tags
+git -C /opt/ansible/linux checkout v1.1.0
 ```
 
 Konfiguracija se ne dira — kod i podaci su potpuno razdvojeni.
 
-Nakon `pull`-a proveri da li je dodata nova grupa:
+Nakon prelaska na noviju verziju proveri da li je dodata nova grupa:
 
 ```bash
 diff <(grep '^\[' linux/bootstrap/template/inventory/hosts.ini.example) \
@@ -307,6 +347,12 @@ diff <(grep '^\[' linux/bootstrap/template/inventory/hosts.ini.example) \
 ```
 
 Ako jeste, dodaj je u svoj `hosts.ini` i prekopiraj pripadajući `group_vars` fajl iz šablona. `init.sh` nikada ne prepisuje postojeće fajlove.
+
+Proveri i da li su dodate nove kolekcije:
+
+```bash
+ansible-galaxy collection install -r linux/requirements.yml
+```
 
 ---
 
@@ -344,26 +390,27 @@ Rezultat upiši u `host_vars/<host>.yml`. Nikada u repozitorijum.
 
 ## Role
 
-| Rola | Grupa | Status |
-|---|---|---|
-| [`ansible_user`](roles/ansible_user/) | `bootstrap` | implementirana |
-| [`banner`](roles/banner/) | `apply_banner` | implementirana |
-| [`repos`](roles/repos/) | `apply_repos` | implementirana |
-| [`packages`](roles/packages/) | `deploy_packages` | implementirana |
-| [`updates`](roles/updates/) | `apply_updates` | implementirana |
-| [`firewall`](roles/firewall/) | `apply_firewall` | implementirana |
-| [`zabbix_agent`](roles/zabbix_agent/) | `deploy_zabbix_agent` | implementirana |
-| [`zabbix_db`](roles/zabbix_db/) | `deploy_zabbix_db` | implementirana |
-| [`zabbix_server`](roles/zabbix_server/) | `deploy_zabbix_server` | implementirana |
-| [`zabbix_web`](roles/zabbix_web/) | `deploy_zabbix_web` | implementirana |
-| [`zabbix_proxy`](roles/zabbix_proxy/) | `deploy_zabbix_proxy` | implementirana |
-| `timezone` | `apply_timezone` | planirana |
-| `etc_hosts` | `apply_etc_hosts` | planirana |
-| `users` | `apply_users` | planirana |
-| `root_ca` | `deploy_root_ca` | planirana |
-| `zabbix_provisioning` | `apply_zabbix_provisioning` | planirana |
+| Rola | Grupa | Status | Kratko |
+|---|---|---|---|
+| [`ansible_user`](roles/ansible_user/) | `bootstrap` | implementirana | Nalog za automatizaciju, ključ, sudo |
+| [`timezone`](roles/timezone/) | `apply_timezone` | implementirana | Vremenska zona i `chrony` |
+| [`banner`](roles/banner/) | `apply_banner` | implementirana | `/etc/motd`, `/etc/issue` |
+| [`etc_hosts`](roles/etc_hosts/) | `apply_etc_hosts` | implementirana | Unosi u `/etc/hosts` |
+| [`users`](roles/users/) | `apply_users` | implementirana | Nalozi, grupe, ključevi, sudo |
+| [`repos`](roles/repos/) | `apply_repos` | implementirana | APT repozitorijumi |
+| [`packages`](roles/packages/) | `deploy_packages` | implementirana | Instalacija i uklanjanje paketa |
+| [`updates`](roles/updates/) | `apply_updates` | implementirana | Ažuriranje sistema |
+| [`firewall`](roles/firewall/) | `apply_firewall` | implementirana | UFW pravila |
+| [`root_ca`](roles/root_ca/) | `deploy_root_ca` | implementirana | Lokalni CA i sertifikati |
+| [`zabbix_agent`](roles/zabbix_agent/) | `deploy_zabbix_agent` | implementirana | Agent, PSK |
+| [`zabbix_db`](roles/zabbix_db/) | `deploy_zabbix_db` | implementirana | MySQL, baza, **šema**, nalozi |
+| [`zabbix_server`](roles/zabbix_server/) | `deploy_zabbix_server` | implementirana | Server, drop-in konfiguracija |
+| [`zabbix_web`](roles/zabbix_web/) | `deploy_zabbix_web` | implementirana | Frontend na Nginx-u |
+| [`zabbix_proxy`](roles/zabbix_proxy/) | `deploy_zabbix_proxy` | implementirana | Proxy, podrazumevano SQLite |
+| [`zabbix_webdriver`](roles/zabbix_webdriver/) | `deploy_zabbix_webdriver` | implementirana | Selenium u Dockeru |
+| `zabbix_provisioning` | `apply_zabbix_provisioning` | **nije implementirana** | Hostovi i šabloni kroz API |
 
-> Grupe planiranih rola već postoje u šablonu inventory-ja. Dok rola nije implementirana, play nad njenom grupom pada — **ne upisuj hostove u te grupe** pre nego što rola bude dodata.
+> Grupa `[apply_zabbix_provisioning]` i njen `group_vars` fajl već postoje u šablonu inventory-ja, ali rola i play **ne postoje**. Host upisan u tu grupu neće dobiti ništa i Ansible to neće prijaviti kao grešku.
 
 ### Redosled u `playbook.yml`
 
@@ -379,7 +426,9 @@ Instalacija iz repozitorijuma koji još nije dodat bi pala.
 zabbix_db  →  zabbix_server  →  zabbix_web
 ```
 
-Server uvozi šemu u bazu koju je `zabbix_db` kreirao; frontend čita tu istu bazu.
+Rola `zabbix_db` kreira bazu i **uvozi šemu** — server to ne radi. Server i frontend zatim samo dobijaju podatke o vezi; frontend čita bazu direktno, ne kroz server.
+
+Rola `zabbix_webdriver` ide na host na kojem već radi `zabbix_server` ili `zabbix_proxy`, jer *browser* stavke izvršava taj proces, a ne agent.
 
 ---
 
@@ -434,6 +483,11 @@ srv-web-02
 ```yaml
 role_ansible_user_ssh_key: "ssh-ed25519 AAAAC3Nz... ansible@control"
 
+role_timezone_name: Europe/Belgrade
+role_timezone_ntp_servers:
+  - ntp1.example.com
+  - ntp2.example.com
+
 role_repos_list:
   - name: zabbix
     uris: "https://repo.zabbix.com/zabbix/7.0/ubuntu"
@@ -479,6 +533,20 @@ Frontend je zatim dostupan na `http://10.0.0.50:8080`. Podrazumevani nalog je `A
 
 ---
 
+## Bezbednosne napomene
+
+**Privatni ključ kontrolnog čvora je root pristup na celoj floti.** Rola `ansible_user` podrazumevano upisuje `NOPASSWD` sudo pravilo, jer je neinteraktivno pokretanje bez toga nemoguće. Posledica je da ko dođe do tog ključa dobija root svuda. Zaštiti ga passphrase-om i koristi `ssh-agent`.
+
+**Nijedna rola ne dira `/etc/ssh/sshd_config`.** Zabrana prijave lozinkom i root prijave ostaje svesna, ručna odluka — i to tek pošto potvrdiš da prijava ključem radi.
+
+**Rola `firewall` je aditivna.** Pravila se gomilaju; ono što obrišeš iz liste ostaje na serveru. Za uklanjanje koristi `delete: true`. Povremeno proveri stvarno stanje sa `ufw status numbered`.
+
+**Docker zaobilazi UFW.** Objavljeni portovi ulaze u iptables lanac `DOCKER`, ispred UFW pravila. Zbog toga rola `zabbix_webdriver` odbija bind adresu `0.0.0.0`.
+
+**Rola `updates` nikada ne restartuje sistem.** Čita `/var/run/reboot-required` i prijavljuje; restart ostaje tvoja odluka.
+
+---
+
 ## Dodavanje nove role
 
 1. Kreiraj `roles/<ime>/` sa `defaults/`, `tasks/`, po potrebi `handlers/`, `templates/`, `vars/`.
@@ -491,6 +559,8 @@ Frontend je zatim dostupan na `http://10.0.0.50:8080`. Podrazumevani nalog je `A
 8. Dodaj play u `playbooks/playbook.yml`, uz prefiks `apply_` ili `deploy_` prema tabeli iznad.
 9. Dodaj tu grupu, praznu, u `bootstrap/template/inventory/hosts.ini.example`.
 10. Dodaj `bootstrap/template/inventory/group_vars/<grupa>.yml` koji postavlja `role_<ime>_enabled: true`.
+11. Ako rola traži novu kolekciju, dopuni `requirements.yml` **i** tabelu preduslova u ovom dokumentu.
+12. Dopuni tabelu rola i stablo repozitorijuma u ovom dokumentu.
 
 > Koraci 9 i 10 idu zajedno — grupa bez pripadajućeg `group_vars` fajla neće aktivirati rolu, a Ansible to **neće** prijaviti kao grešku.
 
@@ -502,6 +572,19 @@ Konfiguracioni fajlovi se upisuju iz šablona **u celosti**, sa zaglavljem `UPRA
 
 ---
 
+## Provera pre commit-a
+
+```bash
+yamllint .
+ansible-lint
+ansible-playbook playbooks/playbook.yml --syntax-check
+ansible-playbook playbooks/bootstrap.yml --syntax-check
+```
+
+Sintaksna greška u roli se inače otkriva tek na produkcijskom serveru.
+
+---
+
 ## Licenca
 
-MIT
+MIT — vidi [`LICENSE`](LICENSE).
