@@ -72,7 +72,7 @@ role_zabbix_web_db_user: zabbix
 #     role_zabbix_web_db_user: "zabbix_web"
 #     role_zabbix_web_db_password: "druga-lozinka"
 #
-role_zabbix_web_db_password: ""
+role_zabbix_web_db_password: "zabbix"
 
 # mysql — MySQL (podrazumevano)
 # pgsql — PostgreSQL
