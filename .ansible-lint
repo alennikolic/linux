@@ -1,0 +1,100 @@
+---
+# .ansible-lint
+#
+# Podesavanja za ansible-lint.
+#
+# Rucno pokretanje na kontrolnom cvoru:
+#   ansible-lint
+#   ansible-lint roles/zabbix_web       # samo jedna rola
+#
+# Svako pravilo u skip_list ispod ima obrazlozenje. Ako dodajes novo,
+# napisi i zasto — spisak bez obrazlozenja vremenom postane nacin da
+# se sakrije prava greska.
+
+profile: moderate
+
+exclude_paths:
+  - .git/
+  - .github/
+  - .venv/
+  - venv/
+  # Sablon radnog foldera nije Ansible sadrzaj koji se izvrsava —
+  # to su aktivacioni fajlovi i primer inventory-ja. yamllint ih
+  # pokriva, ansible-lint bi ih pogresno tumacio kao playbook-ove.
+  - bootstrap/template/
+
+# Kada je mreza nedostupna, ansible-lint ne pokusava da povlaci
+# zavisnosti sa Galaxy-ja. Kolekcije instalira workflow, iz
+# requirements.yml.
+offline: false
+
+
+# =====================================================================
+# ISKLJUCENA PRAVILA
+# =====================================================================
+
+skip_list:
+
+  # Konvencija imenovanja u ovom repozitorijumu je role_<ime_role>_<param>,
+  # a ne <ime_role>_<param> koje pravilo ocekuje. Prefiks "role_" je
+  # namerno uveden da bi varijable role bile prepoznatljive u
+  # group_vars fajlovima, gde se mesaju sa Ansible ugradjenim
+  # varijablama. Izvedene vrednosti u vars/main.yml po istoj logici
+  # pocinju donjom crtom.
+  - var-naming[no-role-prefix]
+
+  # Imena taskova sadrze Jinja izraze u sredini, ne samo na kraju:
+  #   "SSH pristup na portu {{ role_firewall_ssh_port }}"
+  # To je citljivije u ispisu od varijante gde vrednost visi na kraju.
+  - name[template]
+
+  # Rola "updates" postoji upravo zato da nadogradi pakete, pa je
+  # "state: latest" njena svrha, ne propust. Rola "packages"
+  # podrazumevano koristi "present" i to je dokumentovano.
+  - package-latest
+
+  # Role u ovom repozitorijumu nemaju meta/main.yml. Nisu namenjene
+  # objavljivanju na Ansible Galaxy — koriste se iskljucivo kroz
+  # roles_path iz radnog foldera, gde galaxy_info nema nikakvu ulogu.
+  - meta-no-info
+  - meta-incorrect
+  - meta-video-links
+
+  # Zabrana pristupa hostu preko fully qualified imena se ne odnosi
+  # na ovaj tok rada — hostovi dolaze iz hosts.ini koji nije u git-u.
+  - schema[meta]
+
+
+# =====================================================================
+# PRAVILA KOJA SE PRIJAVLJUJU, ALI NE OBARAJU CI
+# =====================================================================
+# Ovo su stavke vredne paznje kada ih vidis, ali ne i razlog da
+# commit bude crven. Prodji kroz njih povremeno i, ako je nalaz
+# opravdan, prebaci pravilo u skip_list sa obrazlozenjem.
+
+warn_list:
+
+  # Dugacki Jinja izrazi u set_fact blokovima (izbor include
+  # direktorijuma u zabbix_agent, sklapanje subject-a u root_ca) tesko
+  # zadovoljavaju pravilo o razmacima, a prelamanje ih cini
+  # neciltljivijim.
+  - jinja[spacing]
+
+  # Neki taskovi svesno koriste command ili shell tamo gde modul
+  # postoji ali ne radi ono sto treba — cekanje na SQLite bazu u
+  # zabbix_proxy je primer. Vredi proveriti svaki novi nalaz.
+  - command-instead-of-module
+  - command-instead-of-shell
+
+  # Fajlovi kojima mode nije eksplicitno zadat nasledjuju umask.
+  # U vecini slucajeva je to u redu, ali kod sertifikata i sudoers
+  # fajlova nije — zato prijava, ne tisina.
+  - risky-file-permissions
+
+  # Task koji reaguje na "when: nesto.changed" umesto kroz handler.
+  # U roli timezone je to namerno (restart servisa iskljucivo pri
+  # stvarnoj promeni zone), ali svaki nov slucaj vredi pogledati.
+  - no-handler
+
+  # Idempotentnost: task koji uvek prijavljuje "changed".
+  - no-changed-when
