@@ -28,8 +28,42 @@ rules:
   # prijavi. Ovo se NE iskljucuje.
   key-duplicates: enable
 
-  # Tab u YAML-u je uvek greska.
   trailing-spaces: enable
+
+  # -------------------------------------------------------------------
+  # Prilagodjeno Jinja sintaksi
+  # -------------------------------------------------------------------
+  # YAML parser {{ var }} vidi kao ugnjezdenu flow mapu sa razmakom
+  # unutar zagrada. Sa podrazumevanom vrednoscu 0 svaki Jinja izraz
+  # koji nije u navodnicima prijavljuje dve greske — a takvih izraza
+  # ima u svakoj roli.
+  #
+  # Vrednost 1 je ista ona koju ansible-lint koristi u svojoj
+  # ugradjenoj yamllint konfiguraciji, i to iz istog razloga.
+  #
+  # Prava greska — {  var  } sa dva razmaka — i dalje biva uhvacena.
+  braces:
+    max-spaces-inside: 1
+    min-spaces-inside: 0
+    max-spaces-inside-empty: 0
+    min-spaces-inside-empty: 0
+
+  # Isto obrazlozenje, za liste zapisane u jednoj liniji.
+  brackets:
+    max-spaces-inside: 1
+    min-spaces-inside: 0
+    max-spaces-inside-empty: 0
+    min-spaces-inside-empty: 0
+
+  # Poravnavanje kolona u listama recnika je stil ovog repozitorijuma:
+  #
+  #   - { rule: allow, port: 80,   proto: tcp }
+  #   - { rule: allow, port: 443,  proto: tcp }
+  #
+  # Podrazumevano pravilo bi svaki visak razmaka posle zareza
+  # prijavilo kao gresku.
+  commas:
+    max-spaces-after: -1
 
   # -------------------------------------------------------------------
   # Prilagodjeno stilu repozitorijuma
@@ -55,13 +89,14 @@ rules:
     allowed-values: ["true", "false", "yes", "no"]
     check-keys: false
 
-  # Komentari uvucen na nivo bloka ispod njih su namerni u ovom
+  # Komentari uvuceni na nivo bloka ispod njih su namerni u ovom
   # projektu (blokovi sa ===== razdvajacima). Podrazumevano pravilo
   # bi ih prijavljivalo kao pogresno uvucene.
   comments-indentation: disable
 
-  # Minimum dva razmaka pre komentara na kraju linije je preterivanje
-  # za inline komentare u hosts.ini primerima i slicno.
+  # Zaostale zakomentarisane linije koda tipa "#role_x: []" ostaju
+  # greska — to je trag privremene izmene koja nije vracena. Ali
+  # minimum dva razmaka pre inline komentara je preterivanje.
   comments:
     min-spaces-from-content: 1
     require-starting-space: true
