@@ -94,7 +94,9 @@ role_timezone_restart_services: []
 # koristi. Podrazumevani Ubuntu izvori, drop-in fajlovi iz
 # /etc/chrony/conf.d i izvori koje deli DHCP se ne ucitavaju.
 #
-role_timezone_ntp_servers: []
+role_timezone_ntp_servers:
+  - "0.rs.pool.ntp.org"
+  - "1.rs.pool.ntp.org"
 
 # Direktiva koja se upisuje ispred svake adrese:
 #
