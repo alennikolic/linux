@@ -61,6 +61,8 @@
           '{{ role_root_ca_cert_key_type }}'.
         success_msg: "Tip kljuca ispravan."
 
+    # --- provere liste sertifikata koje CA sam izdaje ----------------
+
     - name: "Provera da je lista sertifikata lista"
       ansible.builtin.assert:
         that:
@@ -130,6 +132,8 @@
         success_msg: >-
           Zadato spoljnih CSR-ova: {{ role_root_ca_signed_csrs | length }}
 
+    # Izvor se ne trazi kada je state absent — tada se samo brisu
+    # fajlovi i CSR vise ne mora nigde da postoji.
     - name: "Provera strukture unosa u listi CSR-ova"
       ansible.builtin.assert:
         that:
@@ -152,12 +156,16 @@
     # Obe liste pisu u isti certs/ folder. Poklapanje imena znaci da
     # jedan unos prepisuje sertifikat drugog, a poslednji koji se
     # izvrsi pobedjuje — bez ijedne poruke.
+    #
+    # Poredjenje hvata samo imena zadata kroz filename. Imena izvedena
+    # iz cn su puna DNS imena i prakticno se ne sudaraju sa rucno
+    # zadatim.
     - name: "Provera da se imena fajlova iz dve liste ne poklapaju"
       vars:
         _root_ca_issued_names: >-
           {{ role_root_ca_issued_certs
-             | map('community.general.json_query', 'filename')
-             | reject('none') | list }}
+             | selectattr('filename', 'defined')
+             | map(attribute='filename') | list }}
         _root_ca_signed_names: >-
           {{ role_root_ca_signed_csrs | map(attribute='filename') | list }}
       ansible.builtin.assert:
@@ -207,9 +215,9 @@
     # -----------------------------------------------------------------
     # 3. Uvoz postojeceg CA
     # -----------------------------------------------------------------
-    # Mora ici pre koraka koji pravi kljuc — inace bi rola napravila
-    # nov CA, a uvoz bi zatekao popunjene putanje i ne bi uradio
-    # nista.
+    # Mora ici pre koraka koji pravi kljuc. Obrnutim redosledom bi
+    # rola prvo napravila nov CA, a uvoz bi zatekao popunjene putanje
+    # i preskocio se — tiho, uz poruku da je sve u redu.
 
     - name: "Uvoz postojeceg CA"
       ansible.builtin.include_tasks: import.yml
@@ -220,7 +228,7 @@
     # -----------------------------------------------------------------
     # Ako je CA uvezen, ovaj task ne radi nista: kljuc postoji, a
     # regenerate: never znaci da se ne dira ni kada se parametri
-    # razlikuju.
+    # razlikuju od onoga sto je na disku.
 
     - name: "Kljuc Root CA"
       community.crypto.openssl_privatekey:
@@ -297,7 +305,8 @@
           ukljucen — ne dira se. Parametri iz konfiguracije (pathlen,
           digest, vazenje) primenjuju se samo na novo napravljen CA.
           Za ponovno pravljenje po tekucoj konfiguraciji postavi
-          role_root_ca_preserve_cert: false.
+          role_root_ca_preserve_cert: false, uz svest da se ca.crt
+          menja i mora redistribuirati.
       when:
         - _root_ca_crt_stat.stat.exists
         - role_root_ca_preserve_cert | bool
@@ -383,6 +392,10 @@
     # Zaseban fajl, jer po sertifikatu ide sest koraka koji moraju ici
     # redom. Sest paralelnih petlji nad istom listom bilo bi krace, ali
     # neuporedivo teze za citanje.
+    #
+    # Kod ovih unosa privatni kljuc nastaje na CA hostu i mora se
+    # odatle preneti do servisa. Gde god je moguce, koristi radije
+    # role_root_ca_signed_csrs (korak 10).
 
     - name: "Izdavanje sertifikata"
       ansible.builtin.include_tasks: issue.yml
@@ -395,7 +408,8 @@
     # 10. Potpisivanje spoljnih CSR-ova
     # -----------------------------------------------------------------
     # Ovde CA ne pravi privatni kljuc — dobija gotov zahtev i vraca
-    # potpis. Kljuc ostaje na hostu kojem pripada.
+    # potpis. Kljuc ostaje na hostu kojem pripada i nikada ne prolazi
+    # kroz kontrolni cvor.
 
     - name: "Potpisivanje spoljnih CSR-ova"
       ansible.builtin.include_tasks: sign.yml
