@@ -4,13 +4,15 @@
 # Tok:
 #   1. Provere (assert)
 #   2. Zavisnosti i folderi
-#   3. Kljuc CA
-#   4. Provera identiteta postojeceg CA — pre nego sto se bilo sta upise
-#   5. Sertifikat CA
-#   6. Provera isteka CA
-#   7. Poverenje na ovom hostu (opciono)
-#   8. Izdavanje sertifikata (tasks/issue.yml po unosu)
-#   9. Preuzimanje na kontrolni cvor (opciono)
+#   3. Uvoz postojeceg CA (opciono, tasks/import.yml)
+#   4. Kljuc CA
+#   5. Provera identiteta postojeceg CA — pre nego sto se bilo sta upise
+#   6. Sertifikat CA
+#   7. Provera isteka CA
+#   8. Poverenje na ovom hostu (opciono)
+#   9. Izdavanje sertifikata (tasks/issue.yml po unosu)
+#  10. Potpisivanje spoljnih CSR-ova (tasks/sign.yml po unosu)
+#  11. Preuzimanje na kontrolni cvor (opciono)
 
 - name: "Upravljanje lokalnim Root CA"
   block:
@@ -115,6 +117,64 @@
         success_msg: "Nema ponovljenih CN vrednosti."
       when: role_root_ca_issued_certs | length > 0
 
+    # --- provere liste spoljnih CSR-ova ------------------------------
+
+    - name: "Provera da je lista CSR-ova lista"
+      ansible.builtin.assert:
+        that:
+          - role_root_ca_signed_csrs is sequence
+          - role_root_ca_signed_csrs is not string
+        fail_msg: >-
+          role_root_ca_signed_csrs mora biti lista mapa, a ne
+          '{{ role_root_ca_signed_csrs | type_debug }}'.
+        success_msg: >-
+          Zadato spoljnih CSR-ova: {{ role_root_ca_signed_csrs | length }}
+
+    - name: "Provera strukture unosa u listi CSR-ova"
+      ansible.builtin.assert:
+        that:
+          - item.filename is defined
+          - item.filename | length > 0
+          - item.state | default('present') in ['present', 'absent']
+          - >-
+            item.state | default('present') == 'absent'
+            or ((item.src is defined) != (item.remote_src is defined))
+        fail_msg: >-
+          Unos u role_root_ca_signed_csrs nema popunjeno filename,
+          ili state ima vrednost izvan present/absent, ili nije
+          naveden tacno jedan izvor (src za kontrolni cvor,
+          remote_src za CA host). Sporan unos: {{ item }}
+        success_msg: "Unos ispravan."
+      loop: "{{ role_root_ca_signed_csrs }}"
+      loop_control:
+        label: "{{ item.filename | default('bez filename') }}"
+
+    # Obe liste pisu u isti certs/ folder. Poklapanje imena znaci da
+    # jedan unos prepisuje sertifikat drugog, a poslednji koji se
+    # izvrsi pobedjuje — bez ijedne poruke.
+    - name: "Provera da se imena fajlova iz dve liste ne poklapaju"
+      vars:
+        _root_ca_issued_names: >-
+          {{ role_root_ca_issued_certs
+             | map('community.general.json_query', 'filename')
+             | reject('none') | list }}
+        _root_ca_signed_names: >-
+          {{ role_root_ca_signed_csrs | map(attribute='filename') | list }}
+      ansible.builtin.assert:
+        that:
+          - _root_ca_signed_names | length == _root_ca_signed_names | unique | length
+          - _root_ca_signed_names | intersect(_root_ca_issued_names) | length == 0
+        fail_msg: >-
+          Ime fajla se ponavlja — ili dva puta u
+          role_root_ca_signed_csrs, ili istovremeno u obe liste.
+          Unosi bi pisali preko istih fajlova u
+          {{ _root_ca_certs_dir }}. Sporno:
+          {{ (_root_ca_signed_names | difference(_root_ca_signed_names | unique))
+             | union(_root_ca_signed_names | intersect(_root_ca_issued_names))
+             | unique | join(', ') }}
+        success_msg: "Imena fajlova jedinstvena."
+      when: role_root_ca_signed_csrs | length > 0
+
     # -----------------------------------------------------------------
     # 2. Zavisnosti i folderi
     # -----------------------------------------------------------------
@@ -145,8 +205,22 @@
         label: "{{ item.path }}"
 
     # -----------------------------------------------------------------
-    # 3. Kljuc CA
+    # 3. Uvoz postojeceg CA
     # -----------------------------------------------------------------
+    # Mora ici pre koraka koji pravi kljuc — inace bi rola napravila
+    # nov CA, a uvoz bi zatekao popunjene putanje i ne bi uradio
+    # nista.
+
+    - name: "Uvoz postojeceg CA"
+      ansible.builtin.include_tasks: import.yml
+      when: role_root_ca_import_enabled | bool
+
+    # -----------------------------------------------------------------
+    # 4. Kljuc CA
+    # -----------------------------------------------------------------
+    # Ako je CA uvezen, ovaj task ne radi nista: kljuc postoji, a
+    # regenerate: never znaci da se ne dira ni kada se parametri
+    # razlikuju.
 
     - name: "Kljuc Root CA"
       community.crypto.openssl_privatekey:
@@ -162,7 +236,7 @@
       no_log: true
 
     # -----------------------------------------------------------------
-    # 4. Identitet postojeceg CA
+    # 5. Identitet postojeceg CA
     # -----------------------------------------------------------------
     # Ide PRE upisa sertifikata. Modul x509_certificate bi sa
     # promenjenim subject poljima uredno napravio nov CA sertifikat i
@@ -197,52 +271,78 @@
       when: _root_ca_crt_stat.stat.exists
 
     # -----------------------------------------------------------------
-    # 5. Sertifikat CA
+    # 6. Sertifikat CA
     # -----------------------------------------------------------------
-    # use_common_name_for_san se iskljucuje: SAN na CA sertifikatu nema
-    # smisla i pokoji klijent ga tumaci kao ogranicenje.
+    # Oba taska se preskacu kada CA sertifikat vec postoji, a
+    # role_root_ca_preserve_cert je ukljucen.
+    #
+    # Zasto: CSR koji rola pravi sadrzi pathlen:0 i
+    # subjectKeyIdentifier. CA napravljen rucno ili starijom verzijom
+    # role ih po pravilu nema, pa bi x509_certificate zakljucio da se
+    # sertifikat i CSR razlikuju i napravio nov. Kljuc bi ostao isti,
+    # ali bi se ca.crt promenio i morao redistribuirati svuda gde je
+    # vec instaliran.
+    #
+    # use_common_name_for_san se iskljucuje: SAN na CA sertifikatu
+    # nema smisla i pokoji klijent ga tumaci kao ogranicenje.
     #
     # pathlen:0 znaci da ovaj CA moze potpisivati samo krajnje
     # sertifikate, ne i posredne CA. Uze ovlascenje nego sto je
     # potrebno je bolje polaziste.
 
-    - name: "CSR za Root CA"
-      community.crypto.openssl_csr:
-        path: "{{ _root_ca_csr }}"
-        privatekey_path: "{{ _root_ca_key }}"
-        subject: "{{ _root_ca_subject }}"
-        use_common_name_for_san: false
-        basic_constraints:
-          - 'CA:TRUE'
-          - 'pathlen:0'
-        basic_constraints_critical: true
-        key_usage:
-          - keyCertSign
-          - cRLSign
-          - digitalSignature
-        key_usage_critical: true
-        create_subject_key_identifier: true
-        digest: "{{ role_root_ca_digest }}"
-        owner: root
-        group: root
-        mode: '0644'
+    - name: "Postojeci CA sertifikat se zadrzava"
+      ansible.builtin.debug:
+        msg: >-
+          CA sertifikat vec postoji i role_root_ca_preserve_cert je
+          ukljucen — ne dira se. Parametri iz konfiguracije (pathlen,
+          digest, vazenje) primenjuju se samo na novo napravljen CA.
+          Za ponovno pravljenje po tekucoj konfiguraciji postavi
+          role_root_ca_preserve_cert: false.
+      when:
+        - _root_ca_crt_stat.stat.exists
+        - role_root_ca_preserve_cert | bool
 
-    - name: "Sertifikat Root CA"
-      community.crypto.x509_certificate:
-        path: "{{ _root_ca_crt }}"
-        csr_path: "{{ _root_ca_csr }}"
-        privatekey_path: "{{ _root_ca_key }}"
-        provider: selfsigned
-        selfsigned_not_after: "+{{ role_root_ca_days }}d"
-        selfsigned_digest: "{{ role_root_ca_digest }}"
-        owner: root
-        group: root
-        mode: '0644'
-        backup: true
-      register: _root_ca_cert_result
+    - name: "Pravljenje CA sertifikata"
+      when: not (_root_ca_crt_stat.stat.exists and role_root_ca_preserve_cert | bool)
+      block:
+
+        - name: "CSR za Root CA"
+          community.crypto.openssl_csr:
+            path: "{{ _root_ca_csr }}"
+            privatekey_path: "{{ _root_ca_key }}"
+            subject: "{{ _root_ca_subject }}"
+            use_common_name_for_san: false
+            basic_constraints:
+              - 'CA:TRUE'
+              - 'pathlen:0'
+            basic_constraints_critical: true
+            key_usage:
+              - keyCertSign
+              - cRLSign
+              - digitalSignature
+            key_usage_critical: true
+            create_subject_key_identifier: true
+            digest: "{{ role_root_ca_digest }}"
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: "Sertifikat Root CA"
+          community.crypto.x509_certificate:
+            path: "{{ _root_ca_crt }}"
+            csr_path: "{{ _root_ca_csr }}"
+            privatekey_path: "{{ _root_ca_key }}"
+            provider: selfsigned
+            selfsigned_not_after: "+{{ role_root_ca_days }}d"
+            selfsigned_digest: "{{ role_root_ca_digest }}"
+            owner: root
+            group: root
+            mode: '0644'
+            backup: true
+          register: _root_ca_cert_result
 
     # -----------------------------------------------------------------
-    # 6. Istek CA
+    # 7. Istek CA
     # -----------------------------------------------------------------
     # Namerno samo upozorenje. Obnova root sertifikata trazi ponovnu
     # distribuciju na sve klijente i ne sme se desiti kao sporedni
@@ -261,7 +361,7 @@
         - not (_root_ca_existing.valid_at.upozorenje | default(true))
 
     # -----------------------------------------------------------------
-    # 7. Poverenje na ovom hostu
+    # 8. Poverenje na ovom hostu
     # -----------------------------------------------------------------
     # Odnosi se samo na host koji vodi CA. Ostali hostovi poverenje
     # dobijaju zasebno, distribucijom ca.crt.
@@ -278,7 +378,7 @@
       when: role_root_ca_trust_local | bool
 
     # -----------------------------------------------------------------
-    # 8. Izdavanje sertifikata
+    # 9. Izdavanje sertifikata
     # -----------------------------------------------------------------
     # Zaseban fajl, jer po sertifikatu ide sest koraka koji moraju ici
     # redom. Sest paralelnih petlji nad istom listom bilo bi krace, ali
@@ -292,7 +392,20 @@
         label: "{{ cert.cn }}"
 
     # -----------------------------------------------------------------
-    # 9. Preuzimanje na kontrolni cvor
+    # 10. Potpisivanje spoljnih CSR-ova
+    # -----------------------------------------------------------------
+    # Ovde CA ne pravi privatni kljuc — dobija gotov zahtev i vraca
+    # potpis. Kljuc ostaje na hostu kojem pripada.
+
+    - name: "Potpisivanje spoljnih CSR-ova"
+      ansible.builtin.include_tasks: sign.yml
+      loop: "{{ role_root_ca_signed_csrs }}"
+      loop_control:
+        loop_var: req
+        label: "{{ req.filename }}"
+
+    # -----------------------------------------------------------------
+    # 11. Preuzimanje na kontrolni cvor
     # -----------------------------------------------------------------
     # Kljuc samog CA se ne preuzima nikada — on ostaje na jednom mestu.
 
