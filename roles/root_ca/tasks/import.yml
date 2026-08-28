@@ -14,6 +14,11 @@
 # Uvoz je jednokratan. Kada su fajlovi na mestu, sledeci prolaz ovde
 # ne radi nista — sto znaci da role_root_ca_import_enabled moze
 # ostati ukljucen bez posledica.
+#
+# NAPOMENA o --check: u check rezimu copy ne pise na disk, a moduli
+# koji citaju fajlove nemaju sta da procitaju. Prvi prolaz uvoza mora
+# biti stvaran. Zato je citav odeljak 4 uslovljen sa
+# not ansible_check_mode.
 
 # ---------------------------------------------------------------------
 # 1. Provere
@@ -68,8 +73,11 @@
 # ---------------------------------------------------------------------
 # 3. Kopiranje
 # ---------------------------------------------------------------------
-# Dva zasebna taska umesto jednog sa uslovom, jer se remote_src ne
+# Dva zasebna bloka umesto jednog sa uslovom, jer se remote_src ne
 # moze uslovno izostaviti kroz omit na nacin koji ostaje citljiv.
+#
+# no_log je na taskovima koji prenose sam kljuc — tu ima smisla, jer
+# bi se u -vvv rezimu video sadrzaj fajla.
 
 - name: "Uvoz CA — fajlovi sa kontrolnog cvora"
   when:
@@ -132,49 +140,101 @@
 #
 # Otisak javnog kljuca je najpouzdanije poredjenje: radi jednako za
 # RSA i za ECC.
-- name: "Citanje uvezenog CA kljuca"
-  community.crypto.openssl_privatekey_info:
-    path: "{{ _root_ca_key }}"
-  register: _root_ca_import_key_info
-  no_log: true
 
+- name: "Provera uvezenog materijala"
+  when: not ansible_check_mode
+  block:
 
+    # Provera pre citanja. Bez nje moduli prijavljuju "No such file or
+    # directory" za ciljnu putanju, sto navodi na pogresan trag —
+    # problem je u izvoru, ne u odredistu.
+    - name: "Provera da su oba fajla stigla na host"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _root_ca_import_result
+      changed_when: false
+      loop:
+        - "{{ _root_ca_key }}"
+        - "{{ _root_ca_crt }}"
+      loop_control:
+        label: "{{ item | basename }}"
 
-- name: "Citanje uvezenog CA sertifikata"
-  community.crypto.x509_certificate_info:
-    path: "{{ _root_ca_crt }}"
-  register: _root_ca_import_crt_info
+    - name: "Potvrda da je uvoz zaista preneo oba fajla"
+      ansible.builtin.assert:
+        that:
+          - _root_ca_import_result.results | selectattr('stat.exists') | list | length == 2
+        fail_msg: >-
+          Posle uvoza nedostaje bar jedan od fajlova:
+          {{ _root_ca_import_result.results
+             | rejectattr('stat.exists')
+             | map(attribute='item') | join(', ') }}.
+          Proveri role_root_ca_import_remote
+          (trenutno {{ role_root_ca_import_remote }}) — kada je false,
+          putanje se odnose na kontrolni cvor; kada je true, na sam CA
+          host. Zadato: kljuc '{{ role_root_ca_import_key_src }}',
+          sertifikat '{{ role_root_ca_import_cert_src }}'.
+        success_msg: "Oba fajla su na mestu."
 
-- name: "Potvrda da kljuc odgovara sertifikatu"
-  ansible.builtin.assert:
-    that:
-      - _root_ca_import_key_info.public_key_fingerprints.sha256
-        == _root_ca_import_crt_info.public_key_fingerprints.sha256
-    fail_msg: >-
-      Uvezeni CA kljuc i sertifikat NE pripadaju jedno drugom —
-      otisci javnog kljuca se razlikuju. Sertifikati potpisani ovim
-      parom bili bi odbijeni na svakom klijentu. Proveri da li si
-      naveo kljuc i sertifikat iz istog generisanja.
-    success_msg: "Kljuc i sertifikat pripadaju jedno drugom."
+    # Bez no_log: openssl_privatekey_info u izlazu nema privatni
+    # materijal — samo tip, duzinu i otiske javnog kljuca. Sa no_log
+    # bi se pri gresci cenzurisao ceo rezultat, register ostao prazan,
+    # a naredni assert prijavio da je varijabla nedefinisana — sto
+    # skriva pravi uzrok.
+    - name: "Citanje uvezenog CA kljuca"
+      community.crypto.openssl_privatekey_info:
+        path: "{{ _root_ca_key }}"
+      register: _root_ca_import_key_info
 
-# Tip kljuca se ne proverava assert-om jer sa regenerate: never nema
-# stete — modul postojeci kljuc ne dira ni kada se parametri
-# razlikuju. Ali neslaganje je znak da konfiguracija ne opisuje
-# stvarno stanje, pa se prijavljuje.
-- name: "UPOZORENJE: tip kljuca se ne poklapa sa konfiguracijom"
+    - name: "Citanje uvezenog CA sertifikata"
+      community.crypto.x509_certificate_info:
+        path: "{{ _root_ca_crt }}"
+      register: _root_ca_import_crt_info
+
+    - name: "Potvrda da kljuc odgovara sertifikatu"
+      ansible.builtin.assert:
+        that:
+          - _root_ca_import_key_info.public_key_fingerprints.sha256
+            == _root_ca_import_crt_info.public_key_fingerprints.sha256
+        fail_msg: >-
+          Uvezeni CA kljuc i sertifikat NE pripadaju jedno drugom —
+          otisci javnog kljuca se razlikuju. Sertifikati potpisani
+          ovim parom bili bi odbijeni na svakom klijentu. Proveri da
+          li si naveo kljuc i sertifikat iz istog generisanja.
+        success_msg: "Kljuc i sertifikat pripadaju jedno drugom."
+
+    # -----------------------------------------------------------------
+    # 5. Prikaz uvezenog
+    # -----------------------------------------------------------------
+
+    # Tip kljuca se ne proverava assert-om jer sa regenerate: never
+    # nema stete — modul postojeci kljuc ne dira ni kada se parametri
+    # razlikuju. Ali neslaganje je znak da konfiguracija ne opisuje
+    # stvarno stanje, pa se prijavljuje.
+    - name: "UPOZORENJE: tip kljuca se ne poklapa sa konfiguracijom"
+      ansible.builtin.debug:
+        msg: >-
+          Uvezeni CA kljuc je tipa
+          '{{ _root_ca_import_key_info.type }}', a
+          role_root_ca_key_type je '{{ role_root_ca_key_type }}'. Sa
+          regenerate: never nema neposredne stete, ali uskladi
+          vrednost u group_vars — inace konfiguracija ne opisuje ono
+          sto je na disku.
+      when: _root_ca_import_key_info.type != role_root_ca_key_type
+
+    - name: "Uvezeni CA"
+      ansible.builtin.debug:
+        msg: >-
+          Uvezen CA
+          '{{ _root_ca_import_crt_info.subject.commonName | default("bez CN") }}',
+          vazi do {{ _root_ca_import_crt_info.not_after }}.
+          Uskladi role_root_ca_common_name i ostala subject polja sa
+          ovim vrednostima, inace ce naredna provera identiteta
+          prekinuti rad.
+
+- name: "Provera uvezenog materijala se preskace u --check rezimu"
   ansible.builtin.debug:
     msg: >-
-      Uvezeni CA kljuc je tipa
-      '{{ _root_ca_import_key_info.type }}', a role_root_ca_key_type
-      je '{{ role_root_ca_key_type }}'. Sa regenerate: never nema
-      neposredne stete, ali uskladi vrednost u group_vars — inace
-      konfiguracija ne opisuje ono sto je na disku.
-  when: _root_ca_import_key_info.type != role_root_ca_key_type
-
-- name: "Uvezeni CA"
-  ansible.builtin.debug:
-    msg: >-
-      Uvezen CA '{{ _root_ca_import_crt_info.subject.commonName | default("bez CN") }}',
-      vazi do {{ _root_ca_import_crt_info.not_after }}.
-      Uskladi role_root_ca_common_name i ostala subject polja sa ovim
-      vrednostima, inace ce naredna provera identiteta prekinuti rad.
+      U check rezimu fajlovi nisu stvarno kopirani, pa se ne moze
+      proveriti da kljuc i sertifikat pripadaju jedno drugom. Prvi
+      prolaz uvoza pokreni bez --check.
+  when: ansible_check_mode
