@@ -7,6 +7,7 @@
 #   1. yamllint        — da li su fajlovi validan YAML
 #   2. ansible-lint    — da li su validan Ansible
 #   3. --syntax-check  — da li se playbook-ovi uopste ucitavaju
+#   4. provera da svaka grupa ima pripadajuci group_vars fajl
 #
 # Sta NE radi: ne pokrece nijednu rolu, ne dodiruje nijedan server,
 # ne menja nista u repozitorijumu. Ovo je pravopisna provera, ne test.
@@ -55,11 +56,20 @@ jobs:
       - name: Preuzimanje repozitorijuma
         uses: actions/checkout@v4
 
+      # NAPOMENA: ovde NEMA "cache: pip". Ta opcija trazi Python fajl
+      # sa zavisnostima (requirements.txt ili pyproject.toml), kojeg u
+      # ovom repozitorijumu nema — requirements.yml je Ansible fajl,
+      # ne Python, pa ga setup-python ne prepoznaje i akcija pukne uz:
+      #
+      #   Error: No file matched to [**/requirements.txt or
+      #   **/pyproject.toml]
+      #
+      # Instalacija tri paketa traje petnaestak sekundi; kes bi ustedeo
+      # pet. Ne isplati se uvoditi requirements.txt samo zbog toga.
       - name: Priprema Python okruzenja
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
       # Verzija ansible-core je zakovana na donju granicu koju
       # repozitorijum trazi (2.15, zbog deb822_repository). Ako se
@@ -99,8 +109,8 @@ jobs:
       # 2. Ansible
       # -----------------------------------------------------------------
       # continue-on-error je PRIVREMEN. Prvi prolaz nad postojecim
-      # kodom ce prijaviti stavke koje treba prodji jednom i odluciti
-      # sta se ispravlja, a sta iskljucuje u .ansible-lint.
+      # kodom ce prijaviti stavke kroz koje treba proci jednom i
+      # odluciti sta se ispravlja, a sta iskljucuje u .ansible-lint.
       #
       # Kada spisak bude prazan, OBRISI liniju continue-on-error —
       # inace ansible-lint prijavljuje, ali nista ne zaustavlja, a
