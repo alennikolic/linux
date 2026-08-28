@@ -113,7 +113,7 @@ role_repos_enabled: false
 # NAPOMENA: lista se NE spaja izmedju nivoa. Vrednost u
 # host_vars/<host>.yml u celosti zamenjuje onu iz group_vars/all.yml.
 #
-#role_repos_list: []
+# role_repos_list: []
 
 role_repos_list:
   - name: zabbix
