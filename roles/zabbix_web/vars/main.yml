@@ -34,6 +34,26 @@ _zabbix_web_vendor_pool: /etc/zabbix/php-fpm.conf
 _zabbix_web_vendor_vhost_link: /etc/nginx/conf.d/zabbix.conf
 
 # ---------------------------------------------------------------------
+# Podrazumevani Nginx sajt — ROLA GA UKLANJA
+# ---------------------------------------------------------------------
+# Ubuntu paket "nginx" isporucuje sites-available/default i kroz
+# postinst pravi vezu u sites-enabled. Taj server blok slusa na
+# "80 default_server", sto daje dva problema:
+#
+#   1. Na hostu gde neko drugi vec drzi port 80 (npr. Apache, koji
+#      Zabbix povlaci kao zavisnost php paketa) Nginx uopste ne
+#      startuje — poruka je "Address already in use" i ne pominje
+#      ovaj fajl.
+#   2. I kada startuje, na portu 80 stoji Nginx pozdravna stranica
+#      dok je Zabbix na role_zabbix_web_listen_port. Pri prvom
+#      postavljanju to izgleda kao da rola nije odradila posao.
+#
+# Ovo je VEZA, ne conffile — isti slucaj kao vendorove Zabbix veze,
+# pa se uklanja po istom pravilu. Fajl u sites-available ostaje.
+#
+_zabbix_web_nginx_default_site: /etc/nginx/sites-enabled/default
+
+# ---------------------------------------------------------------------
 # Nasi fajlovi
 # ---------------------------------------------------------------------
 # Imena se namerno razlikuju od vendorovih. Paket ih nikad nece
@@ -59,7 +79,20 @@ _zabbix_web_config_file: /etc/zabbix/web/zabbix.conf.php
 #
 _zabbix_web_php_conf_dir: "/etc/php/{{ _zabbix_web_php_version }}/fpm"
 _zabbix_web_pool_file: "{{ _zabbix_web_php_conf_dir }}/pool.d/zabbix-ansible.conf"
-_zabbix_web_vendor_pool_link: "{{ _zabbix_web_php_conf_dir }}/pool.d/zabbix.conf"
+
+# PAZNJA NA IME. Veza koju pravi postinst paketa zabbix-nginx-conf
+# NE zove se "zabbix.conf" nego "zabbix-php-fpm.conf":
+#
+#   zabbix-php-fpm.conf -> /etc/zabbix/php-fpm.conf
+#
+# Nginx strana koristi kratko ime ("zabbix.conf"), PHP strana dugo.
+# Ranija verzija role je i ovde ocekivala kratko, pa je task za
+# uklanjanje brisao putanju koja ne postoji, prijavljivao "ok", a
+# vendorov pool je nastavljao da radi uporedo sa nasim — do 50
+# suvisnih procesa i socket /run/php/zabbix.sock koji nikom ne treba.
+#
+_zabbix_web_vendor_pool_link: "{{ _zabbix_web_php_conf_dir }}/pool.d/zabbix-php-fpm.conf"
+
 _zabbix_web_php_service: "php{{ _zabbix_web_php_version }}-fpm"
 _zabbix_web_php_fpm_binary: "/usr/sbin/php-fpm{{ _zabbix_web_php_version }}"
 
