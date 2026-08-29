@@ -103,6 +103,11 @@ role_root_ca_import_enabled: false
 # Kada je true, putanje ispod se odnose na CA host. Kada je false, na
 # kontrolni cvor.
 #
+# NAPOMENA: kod potpisivanja spoljnih CSR-ova ovakve opcije nema —
+# tamo zahtev uvek dolazi sa kontrolnog cvora. Uvoz je izuzetak jer je
+# jednokratna migracija sa fajlova koji na CA hostu vec postoje i
+# nema razloga da prodju kroz kontrolni cvor.
+#
 role_root_ca_import_remote: false
 
 role_root_ca_import_key_src: ""
@@ -203,15 +208,33 @@ role_root_ca_key_regenerate: never
 
 
 # =====================================================================
-# SERTIFIKATI KOJE CA IZDAJE
+# DVA NACINA DA SE DODJE DO SERTIFIKATA
+# =====================================================================
+# Rola podrzava dva toka i oni se razlikuju po tome gde nastaje
+# privatni kljuc:
+#
+#   role_root_ca_issued_certs — CA pravi i kljuc i sertifikat. Kljuc
+#     nastaje na CA hostu i mora se odatle preneti do servisa. Krace
+#     za podesavanje, ali kljuc putuje.
+#
+#   role_root_ca_signed_csrs — kljuc nastaje na hostu kojem pripada i
+#     tamo ostaje; CA dobija samo zahtev (CSR) i vraca potpis. Jedan
+#     korak vise, ali kljuc nikada ne napusta svoj host. Koristi ovo
+#     gde god je izvodljivo.
+#
+# Obe liste pisu u isti <dir>/certs/ folder, pa se imena fajlova ne
+# smeju poklapati. Rola to proverava.
+#
+# Zajednicke opcije za oba toka:
+#   role_root_ca_renew_before_days  — obnova pred istek
+#   role_root_ca_fullchain          — upis <ime>-fullchain.crt
+#   role_root_ca_fetch_enabled      — preuzimanje na kontrolni cvor
+
+
+# =====================================================================
+# SERTIFIKATI KOJE CA IZDAJE (kljuc nastaje na CA hostu)
 # =====================================================================
 # Lista sertifikata. Jedino obavezno polje je cn.
-#
-# Kod ovih unosa CA pravi i privatni kljuc. Kljuc nastaje na CA hostu
-# i mora se odatle preneti do servisa koji ga koristi — sto je
-# najslabija tacka ovog toka. Kada je moguce, koristi radije
-# role_root_ca_signed_csrs (vidi nize): tamo kljuc nastaje na hostu
-# kojem pripada i nikada ga ne napusta.
 #
 #   role_root_ca_issued_certs:
 #     - cn: zabbix.example.com
@@ -237,7 +260,10 @@ role_root_ca_key_regenerate: never
 #   sans        — dodatni Subject Alternative Name unosi, u formatu
 #                 "DNS:ime" ili "IP:adresa". SAN za sam cn rola dodaje
 #                 sama i ne treba ga navoditi.
-#   filename    — osnovno ime fajlova; podrazumevano se izvodi iz cn
+#   filename    — osnovno ime fajlova; podrazumevano se izvodi iz cn.
+#                 Dozvoljeni znaci: slova, cifre, tacka, crta, donja
+#                 crta. Za wildcard CN obavezno zadaj filename rucno,
+#                 jer bi izvedeno ime sadrzalo zvezdicu.
 #   days        — nadjacava role_root_ca_cert_days
 #   key_type    — nadjacava role_root_ca_cert_key_type
 #   key_size    — nadjacava role_root_ca_cert_key_size
@@ -289,28 +315,23 @@ role_root_ca_cert_group: root
 role_root_ca_cert_key_mode: '0640'
 role_root_ca_cert_mode: '0644'
 
-# Obnova sertifikata koji istice u narednih N dana. Postavi 0 da bi
-# se obnova iskljucila.
-#
-# Obnova zadrzava postojeci privatni kljuc i menja samo sertifikat,
-# pa se ne mora nista ponovo distribuirati osim samog .crt fajla.
-#
-role_root_ca_renew_before_days: 30
-
-# Upis <ime>-fullchain.crt — izdati sertifikat i CA sertifikat u
-# jednom fajlu. Nginx ga trazi u tom obliku; Apache koristi odvojene
-# fajlove.
-#
-role_root_ca_fullchain: true
-
 
 # =====================================================================
-# POTPISIVANJE SPOLJNIH CSR-ova
+# POTPISIVANJE SPOLJNIH CSR-ova (kljuc ostaje na svom hostu)
 # =====================================================================
-# Drugi, sigurniji tok: privatni kljuc se pravi na hostu kojem
-# pripada, tamo se pravi i zahtev (CSR), a CA host dobija samo CSR i
-# vraca potpisan sertifikat. Privatni kljuc nikada ne napusta svoj
-# host i nikada ne prolazi kroz kontrolni cvor.
+# Sigurniji tok: privatni kljuc se pravi na hostu kojem pripada, tamo
+# se pravi i zahtev (CSR), a CA host dobija samo CSR i vraca potpisan
+# sertifikat. Privatni kljuc nikada ne napusta svoj host.
+#
+# Put jednog CSR-a:
+#
+#   1. CILJNI SERVER — nastaje kljuc i CSR; kljuc ostaje ovde
+#   2. KONTROLNI CVOR — CSR se rucno prenese (scp) i navede u src
+#   3. CA HOST — rola doprema CSR i potpisuje ga
+#   4. KONTROLNI CVOR — .crt se vraca ako je fetch ukljucen
+#   5. CILJNI SERVER — .crt se prenese i spoji sa kljucem koji ceka
+#
+# Korake 3 i 4 radi rola; 1, 2 i 5 ostaju rucni.
 #
 # CSR na strani servera:
 #
@@ -323,7 +344,10 @@ role_root_ca_fullchain: true
 #     -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
 #     -addext "extendedKeyUsage=serverAuth"
 #
-# Zatim se .csr fajl prenese na kontrolni cvor i navede ovde.
+# Zatim se .csr prenese na kontrolni cvor, u folder izvan git
+# repozitorijuma:
+#
+#   scp /tmp/app-01.csr kontrolni:/opt/ansible/production/files/csr/
 #
 #   role_root_ca_signed_csrs:
 #     - src: /opt/ansible/production/files/csr/app-01.csr
@@ -333,22 +357,30 @@ role_root_ca_fullchain: true
 #       filename: vpn-gw
 #       days: 730
 #
-#     - remote_src: /tmp/hitno.csr
-#       filename: hitno
-#
 #     - filename: ukinut
 #       state: absent
 #
 # Podrzana polja:
 #
-#   src         — putanja do CSR-a na KONTROLNOM CVORU
-#   remote_src  — putanja do CSR-a na CA HOSTU (alternativa za src)
-#   filename    — osnovno ime fajlova (obavezno)
+#   src         — putanja do CSR-a na KONTROLNOM CVORU, apsolutna.
+#                 Relativnu putanju modul copy trazi unutar
+#                 repozitorijuma, cime bi konfiguracija zavrsila u
+#                 kodu. Obavezno kada state nije absent.
+#   filename    — osnovno ime fajlova (obavezno). Dozvoljeni znaci:
+#                 slova, cifre, tacka, crta, donja crta.
 #   state       — present (podrazumevano) ili absent
 #   days        — nadjacava role_root_ca_signed_days
 #   owner       — vlasnik sertifikata
 #   group       — grupa sertifikata
 #   mode        — dozvole nad sertifikatom
+#
+# UKLONJENO POLJE remote_src:
+#
+#   Ranije verzije role dozvoljavale su i putanju do CSR-a koji vec
+#   lezi na CA hostu. Ta mogucnost je uklonjena: ostavljala je na CA
+#   hostu fajl koji nije opisan nijednom konfiguracijom, pa se stanje
+#   nije moglo rekonstruisati iz production/ foldera. Rola prekida rad
+#   sa uputstvom ako naidje na takav unos.
 #
 # PAZNJA — ekstenzije dolaze iz CSR-a:
 #
@@ -370,6 +402,27 @@ role_root_ca_signed_days: 397
 role_root_ca_signed_owner: root
 role_root_ca_signed_group: root
 role_root_ca_signed_mode: '0644'
+
+
+# =====================================================================
+# OBNOVA I FULLCHAIN — vazi za oba toka
+# =====================================================================
+
+# Obnova sertifikata koji istice u narednih N dana. Postavi 0 da bi
+# se obnova iskljucila.
+#
+# Obnova zadrzava postojeci privatni kljuc i menja samo sertifikat.
+# Kod role_root_ca_issued_certs to znaci da se redistribuira samo
+# .crt; kod role_root_ca_signed_csrs kljuc ionako nikada nije ni bio
+# na CA hostu, pa se novi .crt samo prenese na ciljni host.
+#
+role_root_ca_renew_before_days: 30
+
+# Upis <ime>-fullchain.crt — krajnji sertifikat i CA sertifikat u
+# jednom fajlu, tim redom. Nginx ga trazi u tom obliku; Apache koristi
+# odvojene fajlove.
+#
+role_root_ca_fullchain: true
 
 
 # =====================================================================
