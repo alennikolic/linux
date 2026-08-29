@@ -18,12 +18,16 @@ Zabbix paket `zabbix-nginx-conf` isporučuje dva konfiguraciona fajla i, kroz `p
 |---|---|---|
 | `/etc/zabbix/nginx.conf` | dpkg conffile | **ne dira** |
 | `/etc/zabbix/php-fpm.conf` | dpkg conffile | **ne dira** |
+| `/etc/nginx/sites-available/default` | dpkg conffile | **ne dira** |
 | `/etc/nginx/conf.d/zabbix.conf` | veza, pravi je `postinst` | uklanja |
-| `/etc/php/<v>/fpm/pool.d/zabbix.conf` | veza, pravi je `postinst` | uklanja |
+| `/etc/php/<v>/fpm/pool.d/zabbix-php-fpm.conf` | veza, pravi je `postinst` | uklanja |
+| `/etc/nginx/sites-enabled/default` | veza, pravi je `postinst` | uklanja |
 | `/etc/nginx/conf.d/zabbix-ansible.conf` | **rola** | upisuje vhost |
 | `/etc/php/<v>/fpm/pool.d/zabbix-ansible.conf` | **rola** | upisuje FPM pool |
 | `/etc/zabbix/web/zabbix.conf.php` | **rola** | upisuje, preskače čarobnjak |
 | `/etc/php/<v>/fpm/conf.d/99-zabbix.ini` | ranija verzija role | uklanja |
+
+> **Imena veza se razlikuju na dve strane.** Nginx strana je `zabbix.conf`, PHP strana `zabbix-php-fpm.conf`. Ranija verzija role je i na PHP strani očekivala kratko ime, pa je task za uklanjanje brisao putanju koja ne postoji, prijavljivao `ok`, a vendorov pool je nastavljao da radi uporedo sa našim.
 
 Posledice:
 
@@ -38,6 +42,19 @@ Poređenje sa onim što Zabbix trenutno preporučuje:
 ```bash
 diff /etc/zabbix/nginx.conf /etc/nginx/conf.d/zabbix-ansible.conf
 diff /etc/zabbix/php-fpm.conf /etc/php/8.3/fpm/pool.d/zabbix-ansible.conf
+```
+
+### Podrazumevani Nginx sajt
+
+Paket `nginx` kroz `postinst` pravi vezu `/etc/nginx/sites-enabled/default`. Taj server blok sluša na `80 default_server`, što daje dva problema:
+
+1. Ako neko drugi već drži port 80, **Nginx uopšte ne startuje** — poruka je `Address already in use` i ne pominje ovaj fajl. Slučaj nije redak: PHP paketi na nekim hostovima dovuku i Apache.
+2. I kada startuje, na portu 80 stoji Nginx pozdravna stranica dok je Zabbix na `role_zabbix_web_listen_port`.
+
+Rola uklanja **samo vezu**, kroz `role_zabbix_web_disable_default_site`. Fajl u `sites-available` ostaje, pa je vraćanje trivijalno:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
 ```
 
 ---
@@ -155,9 +172,16 @@ Provera šta je zaista na snazi:
 ```bash
 sudo ss -lx | grep zabbix-ansible
 sudo grep -r php_value /etc/php/*/fpm/pool.d/
+sudo /usr/sbin/php-fpm8.3 -tt 2>&1 | grep php_value
 ```
 
 Broj procesa puta `memory_limit` je gornja granica potrošnje memorije. Sa podrazumevanih `50 × 128M` to je teorijskih 6.4 GB — u praksi mnogo manje, ali vredi znati pre nego što podigneš oba.
+
+### PHP ekstenzija za bazu
+
+Rola instalira `php<v>-mysql` ili `php<v>-pgsql`, prema `role_zabbix_web_db_backend`. Paket `zabbix-frontend-php` ima **alternativnu** zavisnost na te ekstenzije, pa `apt` sam bira jednu — u praksi MySQL. Bez ove instalacije frontend sa `pgsql` backend-om prijavljuje grešku koja ne upućuje na uzrok.
+
+Ime paketa se izvodi iz **otkrivene** verzije PHP-a, ne kroz meta-paket `php-mysql`, jer meta-paket prati verziju koju bira `update-alternatives`.
 
 ---
 
@@ -179,7 +203,7 @@ Broj procesa puta `memory_limit` je gornja granica potrošnje memorije. Sa podra
 | `role_zabbix_web_db_name` | `zabbix` | Ime baze. |
 | `role_zabbix_web_db_user` | `zabbix` | Nalog. |
 | `role_zabbix_web_db_password` | `""` | **Obavezno.** |
-| `role_zabbix_web_db_backend` | `mysql` | `mysql` ili `pgsql`. |
+| `role_zabbix_web_db_backend` | `mysql` | `mysql` ili `pgsql`. Bira i PHP ekstenziju. |
 
 ### Zabbix server
 
@@ -197,6 +221,7 @@ Broj procesa puta `memory_limit` je gornja granica potrošnje memorije. Sa podra
 | `role_zabbix_web_hostname` | `_` | `server_name`. Više imena razdvoji razmakom. |
 | `role_zabbix_web_listen_address` | `""` | Prazno = sve adrese. |
 | `role_zabbix_web_client_max_body_size` | `16M` | Najveći zahtev. Drži ≥ `post_max_size`. |
+| `role_zabbix_web_disable_default_site` | `true` | Uklanja vezu `sites-enabled/default`. |
 
 ### HTTPS
 
@@ -237,6 +262,8 @@ Broj procesa puta `memory_limit` je gornja granica potrošnje memorije. Sa podra
 | `role_zabbix_web_php_max_input_vars` | `10000` | Zabbix zahteva ovoliko. |
 | `role_zabbix_web_php_timezone` | `Europe/Belgrade` | Utiče na prikaz vremena. |
 | `role_zabbix_web_php_extra_values` | `{}` | Dodatne `php_value[]` direktive. |
+
+`session.save_path` **nije varijabla** — zakovan je u šablonu pool-a. Razlog je u napomenama.
 
 ### PHP-FPM pool
 
@@ -317,6 +344,15 @@ role_zabbix_web_php_pm_idle_timeout: "30s"
 
 Prvi zahtev posle mirovanja je sporiji, ali u praznom hodu nema nijednog PHP procesa.
 
+### Host na kome već postoji drugi Nginx sajt
+
+```yaml
+role_zabbix_web_disable_default_site: false
+role_zabbix_web_listen_port: 8080
+```
+
+Rola tada ne dira `sites-enabled/default`. Pazi da tvoj port ostane slobodan — rola to proverava i prekida rad ako nije.
+
 ### Rola ne sme improvizovati
 
 ```yaml
@@ -339,7 +375,9 @@ role_zabbix_web_nginx_extra_config: |
 
 **Čarobnjak se preskače.** Kada `zabbix.conf.php` postoji i sadrži ispravne podatke, frontend odmah prikazuje ekran za prijavu. Podrazumevani nalog je `Admin` sa lozinkom `zabbix` — **promeni je odmah po prvoj prijavi.**
 
-**Nijedan dpkg conffile nije izmenjen.** Rola uklanja samo simbolične veze, koje pravi `postinst` skripta i koje dpkg ne prati. Vendorovi fajlovi ostaju netaknuti.
+**Nijedan dpkg conffile nije izmenjen.** Rola uklanja samo simbolične veze, koje prave `postinst` skripte i koje dpkg ne prati. Vendorovi fajlovi ostaju netaknuti.
+
+**Imena vendorovih veza se razlikuju na dve strane.** Nginx strana je `zabbix.conf`, PHP strana `zabbix-php-fpm.conf`. Ako se očekuje pogrešno ime, task za uklanjanje prijavljuje `ok` a vendorov pool nastavlja da radi — do 50 suvišnih procesa i socket `/run/php/zabbix.sock` koji nikom ne treba.
 
 **Putanja frontenda se otkriva.** Od zvaničnih paketa 7.2 PHP fajlovi su premešteni iz `/usr/share/zabbix` u `/usr/share/zabbix/ui`. Rola proverava postojanje `ui` podfoldera umesto da putanju zakuje. Sa zakovanom putanjom na 7.2+ frontend prikazuje stranicu sa uputstvom umesto ekrana za prijavu.
 
@@ -361,7 +399,17 @@ role_zabbix_web_nginx_extra_config: |
 
 **Obe konfiguracije se proveravaju pre restarta.** Rola pokreće `nginx -t` i `php-fpm<v> -t` posle upisa. Greška prekida rolu pre nego što obori servis koji do tada radi. Provera ne može ići kroz `validate` parametar modula `template`, jer oba alata proveravaju **celu** konfiguraciju — pojedinačan fajl van svog konteksta nije važeća celina.
 
-**`session.save_path` se namerno ne zadaje.** Bez njega važi podrazumevana putanja iz `php.ini`, koju Debian redovno čisti kroz sopstveni posao. Sopstvena putanja bi zahtevala i sopstveno čišćenje, inače se folder vremenom napuni, a simptom — nasumično odjavljivanje — ne upućuje na uzrok.
+**Zauzetost portova se proverava odvojeno.** `nginx -t` proverava sintaksu, ne i da li je port slobodan. Bez te provere rola pada tek na pokretanju servisa, sa porukom `Address already in use` koja ne kaže ko drži port. Rola zato čita `ss -lntp`, izbacuje samog Nginx-a iz rezultata i prekida rad uz ceo red o krivcu.
+
+**`session.save_path` je zakovan na `/var/lib/php/sessions/`.** Debian-ov `php.ini` tu vrednost ostavlja zakomentarisanu:
+
+```bash
+grep '^session.save_path' /etc/php/8.3/fpm/php.ini   # ne vraća ništa
+```
+
+Bez eksplicitne vrednosti PHP pada na ugrađenu podrazumevanu, dakle na sistemski temp direktorijum. Jedinica `php-fpm` servisa ima `PrivateTmp=true`, pa je taj direktorijum privatan i **nestaje pri svakom restartu servisa** — svi korisnici odjavljeni posle svakog `systemctl restart php8.3-fpm`, bez ijedne poruke u logu. Ranije to nije bilo vidljivo samo zato što je vendorov pool ostajao aktivan i sam postavljao ovu vrednost.
+
+Vrednost namerno **nije varijabla**: `/var/lib/php/sessions` je Debian-ov direktorijum koji sistem sam čisti kroz `phpsessionclean.timer`, dok bi proizvoljna putanja zahtevala i sopstveno čišćenje.
 
 **Privatni ključ ima dozvole `0600` i vlasnika `root`.** Nginx master proces radi kao root i čita ga pre nego što spusti privilegije radnih procesa. Taskovi koji ga dodiruju imaju `no_log: true`.
 
@@ -375,10 +423,14 @@ Prvi prolaz na hostu koji je već prošao kroz stariju verziju uradi sve sam. Vr
 
 1. Upisuje se novi vhost i novi pool.
 2. Uklanjaju se vendorove veze i `99-zabbix.ini`.
-3. Socket se menja iz `/run/php/zabbix.sock` u `/run/php/zabbix-ansible.sock`.
-4. Rola proverava `dpkg --verify` i ispisuje napomenu ako je stariji `/etc/zabbix/nginx.conf` izmenjen.
+3. Uklanja se veza `sites-enabled/default`.
+4. Socket se menja iz `/run/php/zabbix.sock` u `/run/php/zabbix-ansible.sock`.
+5. Instalira se PHP ekstenzija koja odgovara izabranom backend-u.
+6. Rola proverava `dpkg --verify` i ispisuje napomenu ako je stariji `/etc/zabbix/nginx.conf` izmenjen.
 
-Fajl `/etc/zabbix/nginx.conf` na takvom hostu i dalje nosi sadržaj koji je upisala stara verzija role. Sada je van upotrebe i ne utiče ni na šta. Ako želiš čist original:
+Na hostu koji je prošao kroz verziju sa pogrešnim imenom veze u `pool.d`, vendorov pool je do sada radio uporedo sa našim. Posle ovog prolaza on nestaje, a sa njim i socket `/run/php/zabbix.sock`. Ništa ga ne koristi — naš vhost gađa `zabbix-ansible.sock`.
+
+Fajl `/etc/zabbix/nginx.conf` na hostu iz još starije verzije i dalje nosi sadržaj koji je upisala ta verzija role. Sada je van upotrebe i ne utiče ni na šta. Ako želiš čist original:
 
 ```bash
 sudo apt-get install --reinstall \
@@ -419,14 +471,27 @@ ansible srv-web-01 -m shell -a "systemctl status php*-fpm"
 ansible srv-web-01 -m command -a "nginx -t" --become
 ansible srv-web-01 -m shell -a "/usr/sbin/php-fpm*  -t" --become
 
-# Šta Nginx sluša
-ansible srv-web-01 -m command -a "ss -lntp sport = :443"
+# Šta ko sluša na hostu
+ansible srv-web-01 -m command -a "ss -lntp" --become
 
 # Da li je vendorova konfiguracija zaista isključena
-ansible srv-web-01 -m shell -a "ls -l /etc/nginx/conf.d/ /etc/php/*/fpm/pool.d/"
+ansible srv-web-01 -m shell -a "ls -l /etc/nginx/conf.d/ /etc/nginx/sites-enabled/ /etc/php/*/fpm/pool.d/"
 ```
 
-Očekuje se `zabbix-ansible.conf` na oba mesta, i **nijedan** `zabbix.conf`.
+Očekuje se:
+
+- `conf.d/zabbix-ansible.conf` i **nijedan** `conf.d/zabbix.conf`
+- `pool.d/zabbix-ansible.conf` i **nijedan** `pool.d/zabbix-php-fpm.conf`
+- prazan `sites-enabled/`, uz podrazumevano `role_zabbix_web_disable_default_site`
+
+Socket i sesije:
+
+```bash
+ansible srv-web-01 -m command -a "ls -l /run/php/" --become
+ansible srv-web-01 -m shell -a "/usr/sbin/php-fpm8.3 -tt 2>&1 | grep save_path" --become
+```
+
+Očekuje se **samo** `zabbix-ansible.sock` (uz `php8.3-fpm.sock`), i `session.save_path` na `/var/lib/php/sessions/`.
 
 Sertifikat na hostu:
 
@@ -456,15 +521,55 @@ curl -kIs https://zabbix.example.com/ | head -3
 
 ## Rešavanje problema
 
+### Rola prekida sa `Port(ove) ... već drži neko drugi`
+
+Poruka sadrži ceo red iz `ss -lntp`, sa imenom programa i PID-om. Najčešće je to Apache, koji PHP paketi na nekim hostovima dovuku kao zavisnost:
+
+```bash
+sudo systemctl disable --now apache2
+```
+
+Ili premesti Zabbix na drugi port kroz `role_zabbix_web_listen_port` / `role_zabbix_web_https_port`.
+
+### Nginx ne startuje, `Address already in use`
+
+Ako se ovo dešava uprkos gornjoj proveri, port drži nešto što se pojavilo u međuvremenu, ili sam Nginx kroz drugi server blok:
+
+```bash
+sudo ss -lntp
+sudo grep -rn "listen" /etc/nginx/conf.d/ /etc/nginx/sites-enabled/
+```
+
 ### `php-fpm` neće da startuje, poruka o duplom pool-u
 
 Vendorova veza nije uklonjena, a naš pool nosi isto ime. Ne bi trebalo da se desi jer se imena razlikuju, ali ako si ručno menjao `_zabbix_web_pool_name`:
 
 ```bash
 ls -l /etc/php/*/fpm/pool.d/
-sudo rm -f /etc/php/8.3/fpm/pool.d/zabbix.conf
+sudo rm -f /etc/php/8.3/fpm/pool.d/zabbix-php-fpm.conf
 sudo systemctl restart php8.3-fpm
 ```
+
+### Vendorov pool i dalje radi posle role
+
+Proveri ime veze — ono na PHP strani je `zabbix-php-fpm.conf`, ne `zabbix.conf`:
+
+```bash
+ls -l /etc/php/*/fpm/pool.d/
+ls -l /run/php/
+```
+
+Ako u `/run/php/` postoji `zabbix.sock`, vendorov pool je aktivan. Nije opasno (naš vhost gađa `zabbix-ansible.sock`), ali troši memoriju.
+
+### Odjavljuje me pri svakom restartu `php-fpm` servisa
+
+`session.save_path` nije na snazi, pa sesije završavaju u privatnom `/tmp`:
+
+```bash
+sudo /usr/sbin/php-fpm8.3 -tt 2>&1 | grep save_path
+```
+
+Ako ne vrati `/var/lib/php/sessions/`, pool nije upisan iz aktuelne verzije šablona — pokreni rolu ponovo.
 
 ### `502 Bad Gateway`
 
@@ -532,6 +637,12 @@ cat host.crt ca.crt > fullchain.pem
 role_zabbix_web_hostname: "10.0.0.60 zabbix.example.com"
 ```
 
+Ako i dalje dobijaš Nginx pozdravnu stranicu, veza `sites-enabled/default` je vraćena:
+
+```bash
+ls -l /etc/nginx/sites-enabled/
+```
+
 ### Beskonačno preusmeravanje
 
 Reverse proxy ispred već završava TLS i prosleđuje HTTP, a ovaj vhost opet preusmerava:
@@ -557,11 +668,18 @@ Proveri da nije ostao vendorov pool:
 ls -l /etc/php/*/fpm/pool.d/
 ```
 
-Ako je `zabbix.conf` tu, njegov `php_value[]` se primenjuje na njegov pool. Naš vhost gađa naš socket, pa to ne bi trebalo da utiče — ali ako je vhost ručno menjan, proveri na koji socket pokazuje `fastcgi_pass`.
+Ako je `zabbix-php-fpm.conf` tu, njegov `php_value[]` se primenjuje na njegov pool. Naš vhost gađa naš socket, pa to ne bi trebalo da utiče — ali ako je vhost ručno menjan, proveri na koji socket pokazuje `fastcgi_pass`.
 
 ### `Database error: Connection to database failed`
 
 Proveri da lozinka i ime naloga odgovaraju roli `zabbix_db`, i da `role_zabbix_db_frontend_hosts` pokriva IP ovog hosta.
+
+Ako je poruka o nedostajućem drajveru, a ne o kredencijalima, u pitanju je PHP ekstenzija:
+
+```bash
+php -m | grep -E "mysqli|pgsql"
+ls -l /etc/php/8.3/fpm/conf.d/ | grep -E "mysql|pgsql"
+```
 
 ### `Zabbix server is not running`
 
