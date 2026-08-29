@@ -30,6 +30,11 @@
 #   /etc/nginx/conf.d/zabbix-ansible.conf
 #   /etc/php/<verzija>/fpm/pool.d/zabbix-ansible.conf
 #
+# Veze koje se uklanjaju imaju RAZLICITA imena na dve strane:
+#
+#   /etc/nginx/conf.d/zabbix.conf                 -> /etc/zabbix/nginx.conf
+#   /etc/php/<v>/fpm/pool.d/zabbix-php-fpm.conf   -> /etc/zabbix/php-fpm.conf
+#
 # ZAVISNOST: uz automatsko pravljenje self-signed sertifikata potrebna
 # je kolekcija community.crypto:
 #
@@ -77,8 +82,13 @@ role_zabbix_web_db_password: "zabbix"
 # mysql — MySQL (podrazumevano)
 # pgsql — PostgreSQL
 #
-# Odredjuje samo vrednost $DB['TYPE'] u zabbix.conf.php. Rola
-# "zabbix_db" pokriva iskljucivo MySQL.
+# Odredjuje vrednost $DB['TYPE'] u zabbix.conf.php I koju PHP
+# ekstenziju rola instalira (php<v>-mysql ili php<v>-pgsql). Paket
+# zabbix-frontend-php ima alternativnu zavisnost, pa apt sam bira
+# jednu — obicno MySQL. Bez ove instalacije frontend sa pgsql
+# backend-om prijavljuje gresku koja ne upucuje na uzrok.
+#
+# Rola "zabbix_db" pokriva iskljucivo MySQL.
 #
 role_zabbix_web_db_backend: mysql
 
@@ -135,6 +145,29 @@ role_zabbix_web_listen_address: ""
 # role_zabbix_web_php_post_max_size.
 #
 role_zabbix_web_client_max_body_size: "16M"
+
+# ---------------------------------------------------------------------
+# Podrazumevani Nginx sajt
+# ---------------------------------------------------------------------
+# Ubuntu paket "nginx" kroz postinst pravi vezu
+# /etc/nginx/sites-enabled/default. Taj server blok slusa na
+# "80 default_server" i pravi dva problema:
+#
+#   1. Ako neko drugi vec drzi port 80, Nginx uopste ne startuje.
+#      Poruka je "Address already in use" i ne pominje ovaj fajl.
+#   2. I kada startuje, na portu 80 stoji Nginx pozdravna stranica
+#      dok je Zabbix na role_zabbix_web_listen_port — pri prvom
+#      postavljanju izgleda kao da rola nije nista uradila.
+#
+# Uklanja se samo VEZA. Fajl /etc/nginx/sites-available/default
+# ostaje netaknut, pa je vracanje jednostavno:
+#
+#   ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
+#
+# Postavi na false ako na hostu postoji jos neki sajt koji se oslanja
+# na podrazumevani server blok.
+#
+role_zabbix_web_disable_default_site: true
 
 
 # =====================================================================
@@ -270,6 +303,12 @@ role_zabbix_web_hsts_max_age: 31536000
 # Ranija verzija role ih je pisala u conf.d/99-zabbix.ini, gde ih je
 # vendorov pool pregazio i gde nikad nisu imale efekta. Rola sada taj
 # fajl uklanja.
+#
+# session.save_path se NE zadaje ovde nego je zakovan u samom sablonu
+# pool-a, na Debian-ovu putanju /var/lib/php/sessions. Razlog je u
+# php-fpm.conf.j2 — ukratko, Debian-ov php.ini tu vrednost ostavlja
+# zakomentarisanu, pa bi bez nje sesije zavrsile u privatnom /tmp
+# jedinice php-fpm servisa i nestajale pri svakom restartu.
 #
 # Vrednosti ispod su minimalne koje Zabbix zahteva — nize frontend
 # odbija uz poruku na ekranu.
