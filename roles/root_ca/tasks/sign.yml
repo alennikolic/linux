@@ -9,6 +9,12 @@
 # Kljuc je nastao na hostu kojem pripada i tamo ostaje — CA vidi samo
 # zahtev i vraca potpis. To je bolji model svuda gde je izvodljiv.
 #
+# CSR uvek dolazi sa KONTROLNOG CVORA, iz foldera koji je naveden u
+# polju src. Doprema sa samog CA hosta (nekadasnje polje remote_src)
+# vise nije podrzana: ostavljala je na CA hostu fajl koji nije opisan
+# nijednom konfiguracijom, pa se posle pokretanja role stanje nije
+# moglo rekonstruisati iz production/ foldera.
+#
 # Tok:
 #   1. Izvedena imena i putanje
 #   2. Uklanjanje (state: absent)
@@ -67,21 +73,9 @@
   when: _rs_state == 'present'
   block:
 
-    # Ista provera postoji i u main.yml, nad celom listom, pre nego
-    # sto se bilo sta dopremi. Ovde se ponavlja jer poruka imenuje
-    # tacno onaj unos koji se trenutno obradjuje.
-    - name: "Provera da je naveden tacno jedan izvor CSR-a"
-      ansible.builtin.assert:
-        that:
-          - (req.src is defined) != (req.remote_src is defined)
-        fail_msg: >-
-          Unos '{{ _rs_name }}' mora imati tacno jedno od polja src
-          (putanja na kontrolnom cvoru) ili remote_src (putanja na CA
-          hostu). Zadato: src
-          {{ 'da' if req.src is defined else 'ne' }}, remote_src
-          {{ 'da' if req.remote_src is defined else 'ne' }}.
-        success_msg: "Izvor CSR-a jednoznacan."
-
+    # Prisustvo i ispravnost polja src proverava main.yml, nad celom
+    # listom, pre nego sto se bilo sta dopremi — greska u jednom unosu
+    # tako ne ostavi pola posla odradjenog.
     - name: "Dopremanje CSR-a {{ _rs_name }} sa kontrolnog cvora"
       ansible.builtin.copy:
         src: "{{ req.src }}"
@@ -89,17 +83,6 @@
         owner: root
         group: root
         mode: '0644'
-      when: req.src is defined
-
-    - name: "Dopremanje CSR-a {{ _rs_name }} sa CA hosta"
-      ansible.builtin.copy:
-        src: "{{ req.remote_src }}"
-        dest: "{{ _rs_csr }}"
-        remote_src: true
-        owner: root
-        group: root
-        mode: '0644'
-      when: req.remote_src is defined
 
     # -----------------------------------------------------------------
     # 4. Sadrzaj CSR-a
@@ -231,9 +214,9 @@
     # slurp cita fajlove tacno onim redom kojim su navedeni u petlji,
     # pa je rezultat determinististican bez obzira na ime.
     #
-    # trim uklanja visak praznih linija na krajevima; join('\n') i
-    # zavrsni newline daju uredan PEM. copy poredi checksum, pa je
-    # zapis idempotentan.
+    # trim uklanja visak praznih linija na krajevima; join i zavrsni
+    # newline daju uredan PEM. copy poredi checksum, pa je zapis
+    # idempotentan.
 
     - name: "Citanje delova fullchain fajla za {{ _rs_name }}"
       ansible.builtin.slurp:
