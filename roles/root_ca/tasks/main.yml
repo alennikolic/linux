@@ -132,7 +132,7 @@
         success_msg: >-
           Zadato spoljnih CSR-ova: {{ role_root_ca_signed_csrs | length }}
 
-    # Izvor se ne trazi kada je state absent — tada se samo brisu
+    # Polje src se ne trazi kada je state absent — tada se samo brisu
     # fajlovi i CSR vise ne mora nigde da postoji.
     - name: "Provera strukture unosa u listi CSR-ova"
       ansible.builtin.assert:
@@ -142,16 +142,38 @@
           - item.state | default('present') in ['present', 'absent']
           - >-
             item.state | default('present') == 'absent'
-            or ((item.src is defined) != (item.remote_src is defined))
+            or item.src is defined
         fail_msg: >-
           Unos u role_root_ca_signed_csrs nema popunjeno filename,
-          ili state ima vrednost izvan present/absent, ili nije
-          naveden tacno jedan izvor (src za kontrolni cvor,
-          remote_src za CA host). Sporan unos: {{ item }}
+          ili state ima vrednost izvan present/absent, ili nema
+          polje src sa putanjom do CSR-a na kontrolnom cvoru.
+          Sporan unos: {{ item }}
         success_msg: "Unos ispravan."
       loop: "{{ role_root_ca_signed_csrs }}"
       loop_control:
         label: "{{ item.filename | default('bez filename') }}"
+
+    # Polje remote_src je uklonjeno. Bez ove provere unos bi prosao
+    # kroz prethodni assert samo ako ima i src, a ako ima samo
+    # remote_src — pao bi uz poruku o nedostajucem src, koja ne kaze
+    # sta se zapravo promenilo.
+    - name: "Provera da se ne koristi uklonjeno polje remote_src"
+      vars:
+        _root_ca_remote_srcs: >-
+          {{ role_root_ca_signed_csrs
+             | selectattr('remote_src', 'defined')
+             | map(attribute='filename') | list }}
+      ansible.builtin.assert:
+        that:
+          - _root_ca_remote_srcs | length == 0
+        fail_msg: >-
+          Polje remote_src vise nije podrzano, a koriste ga unosi:
+          {{ _root_ca_remote_srcs | join(', ') }}. CSR sada uvek ide
+          preko kontrolnog cvora. Prenesi zahtev sa CA hosta u
+          {{ role_root_ca_fetch_dir | dirname }}/csr/ na kontrolnom
+          cvoru i zameni remote_src sa src, npr:
+          src: /opt/ansible/production/files/csr/ime.csr
+        success_msg: "Nema zastarelih remote_src unosa."
 
     # Obe liste pisu u isti certs/ folder. Poklapanje imena znaci da
     # jedan unos prepisuje sertifikat drugog, a poslednji koji se
@@ -182,6 +204,31 @@
              | unique | join(', ') }}
         success_msg: "Imena fajlova jedinstvena."
       when: role_root_ca_signed_csrs | length > 0
+
+    # Vrednost polja filename ulazi pravo u putanju:
+    #   <certs_dir>/<filename>.crt
+    # Unos poput "../../etc/ssl/certs/nesto" pisao bi izvan foldera
+    # CA, a tacka na pocetku daje sakriven fajl. Ogranicenje na
+    # slova, cifre, tacku, crtu i donju crtu resava oboje.
+    - name: "Provera ispravnosti imena fajlova"
+      vars:
+        _root_ca_all_names: >-
+          {{ (role_root_ca_issued_certs
+              | selectattr('filename', 'defined')
+              | map(attribute='filename') | list)
+             + (role_root_ca_signed_csrs
+                | selectattr('filename', 'defined')
+                | map(attribute='filename') | list) }}
+      ansible.builtin.assert:
+        that:
+          - item is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+        fail_msg: >-
+          Ime fajla '{{ item }}' nije ispravno. Dozvoljena su slova,
+          cifre, tacka, crta i donja crta, uz slovo ili cifru na
+          pocetku. Kose crte i ".." pisali bi izvan
+          {{ _root_ca_certs_dir }}.
+        success_msg: "Ime fajla ispravno."
+      loop: "{{ _root_ca_all_names }}"
 
     # -----------------------------------------------------------------
     # 2. Zavisnosti i folderi
@@ -254,7 +301,6 @@
       ansible.builtin.stat:
         path: "{{ _root_ca_crt }}"
       register: _root_ca_crt_stat
-      changed_when: false
 
     - name: "Citanje postojeceg CA sertifikata"
       community.crypto.x509_certificate_info:
@@ -407,9 +453,9 @@
     # -----------------------------------------------------------------
     # 10. Potpisivanje spoljnih CSR-ova
     # -----------------------------------------------------------------
-    # Ovde CA ne pravi privatni kljuc — dobija gotov zahtev i vraca
-    # potpis. Kljuc ostaje na hostu kojem pripada i nikada ne prolazi
-    # kroz kontrolni cvor.
+    # Ovde CA ne pravi privatni kljuc — dobija gotov zahtev sa
+    # kontrolnog cvora i vraca potpis. Kljuc ostaje na hostu kojem
+    # pripada i nikada ne prolazi kroz kontrolni cvor.
 
     - name: "Potpisivanje spoljnih CSR-ova"
       ansible.builtin.include_tasks: sign.yml
