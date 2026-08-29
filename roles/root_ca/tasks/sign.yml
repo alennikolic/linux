@@ -27,6 +27,9 @@
     _rs_name: "{{ req.filename }}"
     _rs_state: "{{ req.state | default('present') }}"
     _rs_days: "{{ req.days | default(role_root_ca_signed_days) }}"
+    _rs_owner: "{{ req.owner | default(role_root_ca_signed_owner) }}"
+    _rs_group: "{{ req.group | default(role_root_ca_signed_group) }}"
+    _rs_mode: "{{ req.mode | default(role_root_ca_signed_mode) }}"
 
 - name: "Izvedene putanje za {{ _rs_name }}"
   ansible.builtin.set_fact:
@@ -39,6 +42,10 @@
 # ---------------------------------------------------------------------
 # Rola ne vodi CRL — sertifikat ostaje tehnicki validan do isteka kod
 # svakoga ko ga vec ima. Brisu se samo fajlovi na CA hostu.
+#
+# Backup kopije koje je ostavio backup: true se NE brisu, kao ni vec
+# preuzeta kopija na kontrolnom cvoru. To je svesno: uklanjanje unosa
+# iz liste ne treba da unisti jedini preostali trag.
 
 - name: "Uklanjanje potpisanog sertifikata {{ _rs_name }}"
   ansible.builtin.file:
@@ -60,6 +67,9 @@
   when: _rs_state == 'present'
   block:
 
+    # Ista provera postoji i u main.yml, nad celom listom, pre nego
+    # sto se bilo sta dopremi. Ovde se ponavlja jer poruka imenuje
+    # tacno onaj unos koji se trenutno obradjuje.
     - name: "Provera da je naveden tacno jedan izvor CSR-a"
       ansible.builtin.assert:
         that:
@@ -96,6 +106,10 @@
     # -----------------------------------------------------------------
     # Ekstenzije potpisanog sertifikata dolaze iz zahteva. Rola ih ne
     # moze dopuniti — moze samo da prijavi ono sto nedostaje.
+    #
+    # NAPOMENA: u --check rezimu prethodni copy nije upisao fajl, pa
+    # ovaj task puca na nepostojecoj putanji. Rola nije predvidjena za
+    # check rezim.
 
     - name: "Citanje CSR-a {{ _rs_name }}"
       community.crypto.openssl_csr_info:
@@ -141,12 +155,14 @@
     # x509_certificate poredi sertifikat sa CSR-om, ali ne i datum
     # isteka. Sertifikat koji istice, a CSR se nije menjao, modul bi
     # ostavio na miru — pa se obnova trazi izricito.
+    #
+    # Obnova ovde menja samo .crt. Privatni kljuc je na hostu kojem
+    # sertifikat pripada i CA ga nikada nije ni video.
 
     - name: "Provera da li potpisan sertifikat {{ _rs_name }} postoji"
       ansible.builtin.stat:
         path: "{{ _rs_crt }}"
       register: _rs_crt_stat
-      changed_when: false
 
     - name: "Citanje postojeceg sertifikata {{ _rs_name }}"
       community.crypto.x509_certificate_info:
@@ -195,9 +211,9 @@
         ownca_create_subject_key_identifier: create_if_not_provided
         ownca_create_authority_key_identifier: true
         force: "{{ _rs_renew | bool }}"
-        owner: "{{ req.owner | default(role_root_ca_signed_owner) }}"
-        group: "{{ req.group | default(role_root_ca_signed_group) }}"
-        mode: "{{ req.mode | default(role_root_ca_signed_mode) }}"
+        owner: "{{ _rs_owner }}"
+        group: "{{ _rs_group }}"
+        mode: "{{ _rs_mode }}"
         backup: true
 
     # -----------------------------------------------------------------
@@ -205,27 +221,58 @@
     # -----------------------------------------------------------------
     # Nginx trazi sertifikat i CA u jednom fajlu; Apache koristi
     # odvojene. Redosled je obavezan: prvo krajnji sertifikat, pa CA.
+    #
+    # ZASTO SE NE KORISTI assemble: taj modul spaja fajlove abecednim
+    # redom imena, ne redom navodjenja. Za filename "app-01" ispadne
+    # tacno (app-01.crt < ca.crt), za "vpn-gw" ili "zabbix" naopako —
+    # CA bi zavrsio prvi. Nginx tada servira CA kao krajnji sertifikat
+    # i klijenti odbijaju vezu, uz poruku koja ne upucuje na uzrok.
+    #
+    # slurp cita fajlove tacno onim redom kojim su navedeni u petlji,
+    # pa je rezultat determinististican bez obzira na ime.
+    #
+    # trim uklanja visak praznih linija na krajevima; join('\n') i
+    # zavrsni newline daju uredan PEM. copy poredi checksum, pa je
+    # zapis idempotentan.
 
-    - name: "Sastavljanje fullchain fajla za {{ _rs_name }}"
-      ansible.builtin.assemble:
-        src: "{{ _root_ca_certs_dir }}"
+    - name: "Citanje delova fullchain fajla za {{ _rs_name }}"
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ _rs_crt }}"
+        - "{{ _root_ca_crt }}"
+      loop_control:
+        label: "{{ item | basename }}"
+      register: _rs_chain_parts
+      when: role_root_ca_fullchain | bool
+
+    - name: "Upis fullchain fajla za {{ _rs_name }}"
+      ansible.builtin.copy:
+        content: >-
+          {{ _rs_chain_parts.results
+             | map(attribute='content')
+             | map('b64decode')
+             | map('trim')
+             | join('\n') }}
         dest: "{{ _rs_chain }}"
-        regexp: "^({{ _rs_name | regex_escape }}\\.crt|{{ role_root_ca_basename | regex_escape }}\\.crt)$"
-        owner: "{{ req.owner | default(role_root_ca_signed_owner) }}"
-        group: "{{ req.group | default(role_root_ca_signed_group) }}"
-        mode: "{{ req.mode | default(role_root_ca_signed_mode) }}"
+        owner: "{{ _rs_owner }}"
+        group: "{{ _rs_group }}"
+        mode: "{{ _rs_mode }}"
+        backup: true
       when: role_root_ca_fullchain | bool
 
     # Privatnog kljuca ovde nema — on je ostao na hostu koji je pravio
     # zahtev. Preuzima se samo sertifikat, koji je javan podatak.
+    #
+    # Lista se sastavlja unapred: raniji oblik sa uslovom unutar
+    # petlje preuzimao je isti .crt dvaput kada je fullchain iskljucen.
     - name: "Preuzimanje potpisanog sertifikata {{ _rs_name }}"
       ansible.builtin.fetch:
         src: "{{ item }}"
         dest: "{{ role_root_ca_fetch_dir }}/{{ item | basename }}"
         flat: true
-      loop:
-        - "{{ _rs_crt }}"
-        - "{{ _rs_chain if role_root_ca_fullchain | bool else _rs_crt }}"
+      loop: >-
+        {{ [_rs_crt] + ([_rs_chain] if role_root_ca_fullchain | bool else []) }}
       loop_control:
         label: "{{ item | basename }}"
       when: role_root_ca_fetch_enabled | bool
