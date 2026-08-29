@@ -34,6 +34,30 @@ pm.max_spare_servers = {{ role_zabbix_web_php_pm_max_spare_servers }}
 pm.process_idle_timeout = {{ role_zabbix_web_php_pm_idle_timeout }}
 {% endif %}
 
+; --- Sesije ----------------------------------------------------------
+; Vrednost je NAMERNO zakovana i namerno NIJE varijabla.
+;
+; Debian-ov php.ini NE postavlja session.save_path — linija je
+; zakomentarisana. Provera na Ubuntu 24.04, PHP 8.3:
+;
+;   grep '^session.save_path' /etc/php/8.3/fpm/php.ini   -> nista
+;
+; Bez ove linije PHP pada na ugradjenu podrazumevanu vrednost, dakle
+; na sistemski temp direktorijum. Jedinica php-fpm servisa ima
+; PrivateTmp=true, pa je taj direktorijum privatan i nestaje pri
+; svakom restartu servisa. Posledica: svi korisnici odjavljeni posle
+; svakog "systemctl restart php8.3-fpm", bez ijedne poruke u logu.
+;
+; /var/lib/php/sessions je Debian-ov direktorijum: dozvole 1733
+; dopustaju www-data da pise, a sistem ga sam cisti kroz
+; phpsessionclean.timer. Proizvoljna putanja bi trazila i sopstveno
+; ciscenje, pa se folder vremenom napuni — zato ovo nije podesivo.
+;
+; Vendorov pool postavlja istu vrednost; ovde je zadrzana da
+; uklanjanje njegove veze ne bi promenilo ponasanje.
+php_value[session.save_handler] = files
+php_value[session.save_path] = /var/lib/php/sessions/
+
 ; --- PHP vrednosti ---------------------------------------------------
 ; Ovo je JEDINO mesto na kome ove vrednosti stvarno rade. Direktive
 ; php_value[] iz pool-a imaju prednost nad php.ini i nad svime iz
@@ -56,8 +80,3 @@ php_value[date.timezone] = {{ role_zabbix_web_php_timezone }}
 php_value[{{ key }}] = {{ value }}
 {% endfor %}
 {% endif %}
-
-; session.save_path se namerno NE zadaje. Bez njega vazi podrazumevana
-; putanja iz php.ini (/var/lib/php/sessions), koju Debian redovno cisti
-; kroz sopstveni posao. Sopstvena putanja bi zahtevala i sopstveno
-; ciscenje, inace se folder vremenom napuni.
