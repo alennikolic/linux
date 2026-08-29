@@ -40,10 +40,10 @@ _zabbix_web_vendor_vhost_link: /etc/nginx/conf.d/zabbix.conf
 # postinst pravi vezu u sites-enabled. Taj server blok slusa na
 # "80 default_server", sto daje dva problema:
 #
-#   1. Na hostu gde neko drugi vec drzi port 80 (npr. Apache, koji
-#      Zabbix povlaci kao zavisnost php paketa) Nginx uopste ne
+#   1. Na hostu gde neko drugi vec drzi port 80 Nginx uopste ne
 #      startuje — poruka je "Address already in use" i ne pominje
-#      ovaj fajl.
+#      ovaj fajl. Slucaj nije redak: paket zabbix-frontend-php povlaci
+#      php pakete koji na nekim hostovima dovuku i Apache.
 #   2. I kada startuje, na portu 80 stoji Nginx pozdravna stranica
 #      dok je Zabbix na role_zabbix_web_listen_port. Pri prvom
 #      postavljanju to izgleda kao da rola nije odradila posao.
@@ -95,6 +95,24 @@ _zabbix_web_vendor_pool_link: "{{ _zabbix_web_php_conf_dir }}/pool.d/zabbix-php-
 
 _zabbix_web_php_service: "php{{ _zabbix_web_php_version }}-fpm"
 _zabbix_web_php_fpm_binary: "/usr/sbin/php-fpm{{ _zabbix_web_php_version }}"
+
+# PHP ekstenzija za pristup bazi. Frontend cita bazu direktno, pa bez
+# odgovarajuce ekstenzije prijavljuje gresku vec na ekranu za prijavu.
+#
+# Paket zabbix-frontend-php ne garantuje da ce doneti ONU koja tebi
+# treba — zavisnost je alternativna, pa apt bira jednu, obicno MySQL.
+# Sa role_zabbix_web_db_backend: pgsql to znaci frontend bez pgsql
+# ekstenzije i poruku koja ne upucuje na uzrok.
+#
+# Ime se izvodi iz otkrivene verzije PHP-a, a ne kroz meta-paket
+# (php-mysql), jer meta-paket prati verziju koju bira
+# update-alternatives — ne mora biti ona cija FPM instanca servisira
+# Zabbix.
+#
+_zabbix_web_db_php_package: >-
+  php{{ _zabbix_web_php_version }}-{{ 'pgsql'
+       if role_zabbix_web_db_backend == 'pgsql'
+       else 'mysql' }}
 
 # Fajl iz ranije verzije role. Upisivao je PHP vrednosti u conf.d,
 # gde ih je vendorov pool pregazio — nikad nije radio. Rola ga sada
