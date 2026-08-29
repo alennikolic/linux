@@ -52,6 +52,43 @@ Koristi kada ciljni host ne postoji još uvek, kada nema `openssl`, ili kada je 
 
 ---
 
+## Put jednog CSR-a
+
+Kod `signed_csrs` toka fajl prolazi kroz tri sistema. Rola pokriva sredinu, krajevi su ručni:
+
+```text
+1. CILJNI SERVER      openssl req → ključ i CSR
+                      ključ ostaje ovde, zauvek
+                              │
+                              ▼  scp (ručno)
+2. KONTROLNI ČVOR     production/files/csr/<ime>.csr
+                      navodi se u polju src
+                              │
+                              ▼  rola
+3. CA HOST            /root/ca/csr/<ime>.csr
+                      /root/ca/certs/<ime>.crt
+                              │
+                              ▼  rola, ako je fetch uključen
+4. KONTROLNI ČVOR     production/files/pki/<ime>.crt
+                              │
+                              ▼  scp (ručno)
+5. CILJNI SERVER      .crt se spaja sa ključem koji je čekao
+```
+
+**CSR uvek ide preko kontrolnog čvora.** Direktno spuštanje na CA host nije podržano — ostavljalo bi tamo fajl koji nije opisan nijednom konfiguracijom, pa se stanje CA hosta ne bi moglo rekonstruisati iz `production/` foldera.
+
+Folder `production/files/csr/` napravi ručno ako ne postoji:
+
+```bash
+mkdir -p /opt/ansible/production/files/csr
+mkdir -p /opt/ansible/production/files/pki
+chmod 0700 /opt/ansible/production/files/pki
+```
+
+`pki/` mora biti `0700` — kod `issued_certs` unosa se tu spuštaju i privatni ključevi.
+
+---
+
 ## Uvoz postojećeg CA
 
 Rola može preuzeti CA napravljen ranije — ručno, starijom verzijom ove role, ili drugim alatom — i nastaviti da izdaje sertifikate istim ključem.
@@ -64,6 +101,8 @@ role_root_ca_import_cert_src: /root/ca/certs/ca.cert.pem
 ```
 
 `role_root_ca_import_remote: false` (podrazumevano) znači da su putanje na kontrolnom čvoru.
+
+Uvoz je jedino mesto gde rola čita fajl direktno sa CA hosta. To je namerno: reč je o jednokratnoj migraciji sa fajlova koji tamo već postoje godinama, i nema razloga da prođu kroz kontrolni čvor. Kod potpisivanja CSR-ova takve opcije nema.
 
 Uvoz je **jednokratan**. Kada su fajlovi na mestu, sledeći prolaz ne radi ništa — pa `role_root_ca_import_enabled` može ostati uključen bez posledica. Prepisivanje živog CA traži `role_root_ca_import_force: true` i pravu meru opreza.
 
@@ -91,44 +130,6 @@ Posledica: parametri kao `pathlen`, `digest` i `role_root_ca_days` primenjuju se
 
 ---
 
-## Šta se promenilo u odnosu na prethodnu verziju
-
-| Ranije | Sada |
-|---|---|
-| Potpisivanje kroz `openssl ca` u `command` | modul `x509_certificate`, provider `ownca` |
-| CA baza: `index.txt`, `serial`, `newcerts/` | **uklonjeno** — nema evidencije ni osnove za CRL |
-| `openssl.cnf` sa sekcijama `server_cert`, `usr_cert`, `ocsp` | ekstenzije se zadaju direktno; `openssl.cnf` više ne postoji |
-| `v3ext.j2` po sertifikatu | `sans` i `extended_key_usage` u samom unosu |
-| Vrednosti konkretne organizacije u `defaults` | `CHANGEME` placeholderi, `assert` traži da budu promenjeni |
-| `role_root_ca_state` (pokrajina) | `role_root_ca_state_or_province` — staro ime se mešalo sa `present`/`absent` |
-| Promena subject polja tiho pravi nov CA | `assert` poredi sa postojećim i prekida rad |
-| `creates:` — sertifikat se nikad ne obnavlja | obnova pred istek, upozorenje za sam CA |
-| Bez uklanjanja | `state: absent` po unosu |
-| Ključ uvek nastaje na CA hostu | i `role_root_ca_signed_csrs` — ključ ostaje na ciljnom hostu |
-| Fajlovi u jednom folderu, `.pem` ekstenzije | `private/` 0700, `certs/`, `csr/`; `.key` i `.crt` |
-
-### Migracija sa stare instalacije
-
-Imena fajlova se razlikuju u svemu:
-
-```text
-private/ca.key.pem        →  private/ca.key
-certs/ca.cert.pem         →  certs/ca.crt
-private/<cn>.key.pem      →  private/<cn>.key
-csr/<cn>.csr.pem          →  csr/<cn>.csr
-certs/<cn>.cert.pem       →  certs/<cn>.crt
-```
-
-CA se prenosi kroz `role_root_ca_import_*` (vidi gore). Sertifikati krajnjih servisa se ne prenose — rola ih izdaje iznova pri prvom prolazu, potpisane istim CA, pa se lančanje ne prekida.
-
-Preimenuj `role_root_ca_state` u `role_root_ca_state_or_province`.
-
-Stara struktura (`index.txt`, `serial`, `newcerts/`, `crl/`, `v3ext/`, `openssl.cnf`) ostaje na disku netaknuta — rola je ne dira, ne koristi i ne briše. Obriši je ručno kada potvrdiš da novi tok radi.
-
-**CRL više ne postoji.** Stara `openssl.cnf` je imala pripremljene sekcije `crl_ext` i `default_crl_days`, ali CRL nije bio implementiran. Nova rola tu infrastrukturu ne održava. `state: absent` briše fajlove sa CA hosta; ko sertifikat već ima, može ga koristiti do isteka. Zato je podrazumevano važenje 397 dana, a ne nekoliko godina.
-
----
-
 ## Struktura na disku
 
 ```text
@@ -146,6 +147,8 @@ Stara struktura (`index.txt`, `serial`, `newcerts/`, `crl/`, `v3ext/`, `openssl.
 ```
 
 Sertifikati iz oba toka završavaju u istom `certs/` folderu. Rola prekida rad ako se imena poklapaju.
+
+Sadržaj `fullchain` fajla je krajnji sertifikat pa CA sertifikat, tim redom. Obrnut redosled Nginx prihvata bez greške pri startu, ali servira CA kao krajnji sertifikat i klijenti odbijaju vezu.
 
 ---
 
@@ -209,8 +212,6 @@ Sertifikati iz oba toka završavaju u istom `certs/` folderu. Rola prekida rad a
 | `role_root_ca_cert_group` | `root` | Grupa fajlova. |
 | `role_root_ca_cert_key_mode` | `'0640'` | Dozvole nad privatnim ključem. |
 | `role_root_ca_cert_mode` | `'0644'` | Dozvole nad sertifikatom. |
-| `role_root_ca_renew_before_days` | `30` | Obnova pred istek. `0` isključuje. Važi za oba toka. |
-| `role_root_ca_fullchain` | `true` | Upisuje `<ime>-fullchain.crt`. Važi za oba toka. |
 
 ### Potpisivanje spoljnih CSR-ova (`signed_csrs`)
 
@@ -222,14 +223,21 @@ Sertifikati iz oba toka završavaju u istom `certs/` folderu. Rola prekida rad a
 | `role_root_ca_signed_group` | `root` | Grupa sertifikata. |
 | `role_root_ca_signed_mode` | `'0644'` | Dozvole. Privatnog ključa ovde nema. |
 
+### Zajedničko za oba toka
+
+| Varijabla | Podrazumevano | Opis |
+|---|---|---|
+| `role_root_ca_renew_before_days` | `30` | Obnova pred istek. `0` isključuje. |
+| `role_root_ca_fullchain` | `true` | Upisuje `<ime>-fullchain.crt`. |
+| `role_root_ca_fetch_enabled` | `false` | Preuzima sertifikate na kontrolni čvor. |
+| `role_root_ca_fetch_dir` | `/opt/ansible/production/files/pki` | Ciljni folder. |
+
 ### Ostalo
 
 | Varijabla | Podrazumevano | Opis |
 |---|---|---|
 | `role_root_ca_trust_local` | `false` | Upisuje CA u trust store **ovog** hosta. |
 | `role_root_ca_trust_filename` | `internal-root-ca` | Ime fajla u trust store-u. |
-| `role_root_ca_fetch_enabled` | `false` | Preuzima sertifikate na kontrolni čvor. |
-| `role_root_ca_fetch_dir` | `/opt/ansible/production/files/pki` | Ciljni folder. |
 | `role_root_ca_install_dependencies` | `true` | Instalira `python3-cryptography`. |
 | `role_root_ca_allow_multiple_hosts` | `false` | Dozvoljava više CA hostova. |
 | `role_root_ca_group_name` | `deploy_root_ca` | Grupa koju proverava `assert`. |
@@ -243,7 +251,7 @@ Sertifikati iz oba toka završavaju u istom `certs/` folderu. Rola prekida rad a
 | `cn` | da | Common Name. |
 | `state` | ne | `present` (podrazumevano) ili `absent`. |
 | `sans` | ne | **Dodatni** SAN unosi. `DNS:<cn>` se dodaje sam. |
-| `filename` | ne | Osnovno ime fajlova. |
+| `filename` | ne | Osnovno ime fajlova; podrazumevano se izvodi iz `cn`. |
 | `days` | ne | Važenje. |
 | `key_type`, `key_size`, `key_curve` | ne | Nadjačavaju globalne. |
 | `owner`, `group`, `key_mode`, `mode` | ne | Vlasništvo i dozvole. |
@@ -254,34 +262,204 @@ Sertifikati iz oba toka završavaju u istom `certs/` folderu. Rola prekida rad a
 | Polje | Obavezno | Opis |
 |---|---|---|
 | `filename` | da | Osnovno ime fajlova. |
-| `src` | jedno od dva | Putanja do CSR-a na **kontrolnom čvoru**. |
-| `remote_src` | jedno od dva | Putanja do CSR-a na **CA hostu**. |
+| `src` | da, osim kod `absent` | **Apsolutna** putanja do CSR-a na kontrolnom čvoru. |
 | `state` | ne | `present` (podrazumevano) ili `absent`. |
 | `days` | ne | Važenje. |
 | `owner`, `group`, `mode` | ne | Vlasništvo i dozvole nad sertifikatom. |
 
 Nema `cn` ni `sans` — te vrednosti dolaze iz samog CSR-a.
 
+Putanja u `src` mora biti apsolutna. Relativnu modul `copy` traži unutar repozitorijuma, čime bi konfiguracija završila u kodu.
+
+### Ograničenje za `filename`
+
+Vrednost ulazi pravo u putanju (`<certs_dir>/<filename>.crt`), pa su dozvoljeni samo slova, cifre, tačka, crta i donja crta, uz slovo ili cifru na početku. Kose crte i `..` pisali bi izvan CA foldera; rola takav unos odbija.
+
+Isto važi i za `filename` u `issued_certs`, kao i za ime izvedeno iz `cn`. Za wildcard CN zadaj `filename` ručno — izvedeno ime bi sadržalo zvezdicu.
+
 ---
 
 ## Primeri
 
-### Minimalna konfiguracija
+### 1. Prvo pokretanje — CA i dva sertifikata
+
+Ceo tok od praznog servera do sertifikata na disku.
+
+**`inventory/hosts.ini`**
+
+```ini
+[deploy_root_ca]
+srv-ca-01
+```
+
+**`inventory/group_vars/all.yml`** (samo deo koji se tiče ove role)
 
 ```yaml
-# inventory/group_vars/all.yml
 role_root_ca_common_name: "Example Root CA"
 role_root_ca_organization: "Example d.o.o."
 role_root_ca_country: "RS"
+role_root_ca_locality: "Beograd"
 
 role_root_ca_issued_certs:
   - cn: zabbix.example.com
   - cn: wiki.example.com
 ```
 
-Svaki dobija SAN `DNS:<cn>` automatski i važi 397 dana.
+**Pokretanje**
 
-### Više imena i IP adresa
+```bash
+cd /opt/ansible/production
+./apply.sh --limit srv-ca-01 --check --diff   # pregled
+./apply.sh --limit srv-ca-01                  # primena
+```
+
+**Rezultat na `srv-ca-01`**
+
+```text
+/root/ca/private/ca.key                            0600
+/root/ca/private/zabbix.example.com.key            0640
+/root/ca/private/wiki.example.com.key              0640
+/root/ca/certs/ca.crt
+/root/ca/certs/zabbix.example.com.crt
+/root/ca/certs/zabbix.example.com-fullchain.crt
+/root/ca/certs/wiki.example.com.crt
+/root/ca/certs/wiki.example.com-fullchain.crt
+```
+
+Svaki sertifikat dobija SAN `DNS:<cn>` automatski i važi 397 dana. CA važi 20 godina.
+
+**Provera**
+
+```bash
+ansible srv-ca-01 -m command -a \
+  "openssl verify -CAfile /root/ca/certs/ca.crt /root/ca/certs/zabbix.example.com.crt"
+```
+
+---
+
+### 2. Sertifikat za Nginx — potpisivanje spoljnog CSR-a
+
+Privatni ključ nastaje na `app-01` i tamo ostaje. Preporučen tok.
+
+**Korak 1 — na `app-01`, ključ i zahtev**
+
+```bash
+openssl req -new -newkey rsa:2048 -nodes \
+  -keyout /etc/ssl/private/app-01.key \
+  -out /tmp/app-01.csr \
+  -subj "/CN=app-01.example.com" \
+  -addext "subjectAltName=DNS:app-01.example.com,DNS:app.example.com,IP:10.0.0.11" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=serverAuth"
+
+chown root:www-data /etc/ssl/private/app-01.key
+chmod 0640 /etc/ssl/private/app-01.key
+```
+
+Proveri šta si napravio pre nego što pošalješ:
+
+```bash
+openssl req -in /tmp/app-01.csr -noout -text | grep -A5 "Requested Extensions"
+```
+
+**Korak 2 — prenos na kontrolni čvor**
+
+```bash
+scp app-01:/tmp/app-01.csr /opt/ansible/production/files/csr/
+```
+
+**Korak 3 — `inventory/group_vars/all.yml`**
+
+```yaml
+role_root_ca_signed_csrs:
+  - src: /opt/ansible/production/files/csr/app-01.csr
+    filename: app-01
+
+role_root_ca_fetch_enabled: true
+role_root_ca_fetch_dir: /opt/ansible/production/files/pki
+```
+
+**Korak 4 — potpisivanje**
+
+```bash
+./apply.sh --limit srv-ca-01
+```
+
+Na kontrolnom čvoru se pojavljuju `files/pki/app-01.crt` i `files/pki/app-01-fullchain.crt`.
+
+**Korak 5 — nazad na `app-01`**
+
+```bash
+scp /opt/ansible/production/files/pki/app-01-fullchain.crt \
+    app-01:/etc/ssl/certs/
+```
+
+**Nginx**
+
+```nginx
+ssl_certificate      /etc/ssl/certs/app-01-fullchain.crt;
+ssl_certificate_key  /etc/ssl/private/app-01.key;
+```
+
+Nginx traži sertifikat i CA u jednom fajlu — zato `fullchain`. Apache koristi odvojene, pa se tamo prenosi `app-01.crt` uz `SSLCertificateChainFile` koji pokazuje na `ca.crt`.
+
+**Provera na `app-01`**
+
+```bash
+nginx -t && systemctl reload nginx
+openssl s_client -connect app-01.example.com:443 -CAfile /usr/local/share/ca-certificates/internal-root-ca.crt </dev/null
+```
+
+Poslednja linija izlaza treba da glasi `Verify return code: 0 (ok)`.
+
+---
+
+### 3. Poverenje na ostalim hostovima
+
+Sertifikat ne vredi ništa ako klijent ne veruje CA. `ca.crt` se distribuira zasebno.
+
+**Preuzimanje na kontrolni čvor**
+
+```yaml
+role_root_ca_fetch_enabled: true
+```
+
+Posle prolaza `ca.crt` je u `/opt/ansible/production/files/pki/ca.crt`.
+
+**Distribucija ad-hoc komandom**
+
+```bash
+ansible all -m copy -a \
+  "src=/opt/ansible/production/files/pki/ca.crt \
+   dest=/usr/local/share/ca-certificates/internal-root-ca.crt \
+   owner=root group=root mode=0644" --become
+
+ansible all -m command -a "update-ca-certificates" --become
+```
+
+Ekstenzija **mora** biti `.crt` — `update-ca-certificates` ignoriše sve ostalo, bez poruke.
+
+**Na samom CA hostu**
+
+```yaml
+role_root_ca_trust_local: true
+```
+
+Odnosi se samo na taj host; ostali i dalje idu kroz distribuciju.
+
+**Provera**
+
+```bash
+ansible all -m shell -a \
+  "openssl verify /usr/local/share/ca-certificates/internal-root-ca.crt"
+```
+
+---
+
+### Kraći isečci
+
+**Više imena i IP adresa**
 
 ```yaml
 role_root_ca_issued_certs:
@@ -292,7 +470,7 @@ role_root_ca_issued_certs:
       - "IP:10.0.0.10"
 ```
 
-### Sertifikat koji čita servis
+**Sertifikat koji čita servis**
 
 ```yaml
 role_root_ca_issued_certs:
@@ -304,7 +482,7 @@ role_root_ca_issued_certs:
 
 Nginx čita ključ preko grupe. Dozvole se ne otvaraju na `0644` — privatni ključ ne sme biti čitljiv svakom nalogu na sistemu.
 
-### Wildcard
+**Wildcard**
 
 ```yaml
 role_root_ca_issued_certs:
@@ -312,9 +490,9 @@ role_root_ca_issued_certs:
     filename: wildcard-apps
 ```
 
-Bez `filename` fajl bi se zvao `wildcard.apps.example.com.crt` — ispravno, ali `filename` je čitljivije.
+`filename` je ovde obavezan — izvedeno ime bi sadržalo zvezdicu.
 
-### Klijentski sertifikat
+**Klijentski sertifikat**
 
 ```yaml
 role_root_ca_issued_certs:
@@ -323,46 +501,19 @@ role_root_ca_issued_certs:
       - clientAuth
 ```
 
-### Potpisivanje spoljnog CSR-a
-
-Na serveru kojem sertifikat pripada:
-
-```bash
-openssl req -new -newkey rsa:2048 -nodes \
-  -keyout /etc/ssl/private/app-01.key \
-  -out /tmp/app-01.csr \
-  -subj "/CN=app-01.example.com" \
-  -addext "subjectAltName=DNS:app-01.example.com,IP:10.0.0.11" \
-  -addext "basicConstraints=critical,CA:FALSE" \
-  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
-  -addext "extendedKeyUsage=serverAuth"
-
-chmod 0640 /etc/ssl/private/app-01.key
-chgrp www-data /etc/ssl/private/app-01.key
-```
-
-Prenesi `/tmp/app-01.csr` na kontrolni čvor i navedi:
+**Uklanjanje**
 
 ```yaml
+role_root_ca_issued_certs:
+  - cn: stari.example.com
+    state: absent
+
 role_root_ca_signed_csrs:
-  - src: /opt/ansible/production/files/csr/app-01.csr
-    filename: app-01
-
-  - src: /opt/ansible/production/files/csr/vpn-gw.csr
-    filename: vpn-gw
-    days: 730
+  - filename: ukinut
+    state: absent
 ```
 
-Potpisan sertifikat se vraća u `role_root_ca_fetch_dir` ako je `role_root_ca_fetch_enabled` uključen. Privatni ključ je ostao na `app-01` i nigde nije putovao.
-
-### Preuzimanje na kontrolni čvor
-
-```yaml
-role_root_ca_fetch_enabled: true
-role_root_ca_fetch_dir: /opt/ansible/production/files/pki
-```
-
-Ciljni folder mora imati dozvole `0700` i biti izvan git repozitorijuma — kod `issued_certs` unosa preuzimaju se i privatni ključevi. Ključ samog CA se ne preuzima nikada. Kod `signed_csrs` unosa preuzima se samo sertifikat, koji je javan podatak.
+Brišu se fajlovi na CA hostu. Kopije koje su već distribuirane ostaju upotrebljive do isteka — rola ne vodi CRL.
 
 ---
 
@@ -380,13 +531,15 @@ Ciljni folder mora imati dozvole `0700` i biti izvan git repozitorijuma — kod 
 
 **`pathlen:0`.** CA može potpisivati samo krajnje sertifikate, ne i posredne CA. Ako ti treba dvostepena hijerarhija, promeni vrednost u `tasks/main.yml` — ali onda je i izdavanje posrednog CA posao koji ova rola ne pokriva.
 
-**Rola ne vodi CRL.** `state: absent` briše fajlove sa CA hosta, ali ne povlači sertifikat. Ko ga već ima, može ga koristiti do isteka. Zato je podrazumevano važenje 397 dana, a ne nekoliko godina.
+**Rola ne vodi CRL.** Nema `index.txt`, nema evidencije izdatih sertifikata, nema osnove za povlačenje. `state: absent` briše fajlove sa CA hosta, ali ne povlači sertifikat — ko ga već ima, koristi ga do isteka. Zato je podrazumevano važenje 397 dana, a ne nekoliko godina: kraće važenje je jedini mehanizam povlačenja koji ova rola ima.
 
 **Obnova zadržava ključ.** Menja se samo `.crt` fajl. Kod `signed_csrs` unosa isti CSR se potpisuje iznova — na ciljnom hostu se ne mora dirati ništa osim preuzimanja novog sertifikata.
 
 **Rola ne restartuje servise koji koriste sertifikate.** Obnovljen sertifikat počinje da važi tek kada ga servis ponovo pročita. To pripada roli koja tim servisom upravlja.
 
 **`not_before` je pomeren dan unazad.** Sertifikat koji „još ne važi" je česta i neočekivana greška u okruženjima bez NTP-a.
+
+**Rola nije predviđena za `--check`.** Kod `signed_csrs` toka `copy` u check režimu ne upiše CSR, pa sledeći korak puca na nepostojećoj putanji. `--check` radi kada je ta lista prazna.
 
 ---
 
@@ -453,11 +606,16 @@ ansible srv-ca-01 -m shell -a \
   "openssl x509 -noout -pubkey -in /root/ca/certs/zabbix.example.com.crt | openssl md5; \
    openssl pkey -noout -pubout -in /root/ca/private/zabbix.example.com.key | openssl md5"
 
+# Redosled u fullchain fajlu — prvi subject mora biti krajnji sertifikat
+ansible srv-ca-01 -m shell -a \
+  "openssl crl2pkcs7 -nocrl -certfile /root/ca/certs/app-01-fullchain.crt \
+   | openssl pkcs7 -print_certs -noout | grep subject"
+
 # Sadržaj spoljnog CSR-a pre nego što se pošalje
 openssl req -in app-01.csr -noout -text | grep -A3 "Requested Extensions"
 ```
 
-Pretposlednja komanda mora dati dva identična heša. Različiti znače da su ključ i sertifikat iz različitih generisanja. (Varijanta sa `-modulus` radi samo za RSA; `-pubkey`/`-pubout` radi i za ECC.)
+Poređenje heševa mora dati dve identične vrednosti. Različite znače da su ključ i sertifikat iz različitih generisanja. (Varijanta sa `-modulus` radi samo za RSA; `-pubkey`/`-pubout` radi i za ECC.)
 
 ---
 
@@ -476,6 +634,23 @@ Posle uvoza starog CA ovo je očekivano: prepiši `role_root_ca_common_name` na 
 **Grupa sadrži više hostova**
 
 Ostavi jedan. Ako zaista vodiš više odvojenih CA, `role_root_ca_allow_multiple_hosts: true` — ali proveri da li ti to stvarno treba.
+
+**„Polje remote_src više nije podržano"**
+
+Konfiguracija je pisana za raniju verziju role. Prenesi CSR sa CA hosta na kontrolni čvor i zameni polje:
+
+```bash
+scp srv-ca-01:/tmp/ime.csr /opt/ansible/production/files/csr/
+```
+
+```yaml
+- src: /opt/ansible/production/files/csr/ime.csr
+  filename: ime
+```
+
+**„Ime fajla nije ispravno"**
+
+`filename` sadrži kosu crtu, `..`, ili počinje tačkom. Dozvoljeni su slova, cifre, tačka, crta i donja crta.
 
 **„Uvezeni CA ključ i sertifikat NE pripadaju jedno drugom"**
 
@@ -504,6 +679,10 @@ openssl req -new -key /etc/ssl/private/app-01.key \
   -subj "/CN=app-01.example.com" \
   -addext "subjectAltName=DNS:app-01.example.com"
 ```
+
+**`Could not find or access` na `src` putanji**
+
+Putanja je relativna, pa je `copy` traži unutar repozitorijuma. Navedi punu putanju od `/opt/ansible/production/`.
 
 **`ERR_CERT_COMMON_NAME_INVALID` u pregledaču**
 
