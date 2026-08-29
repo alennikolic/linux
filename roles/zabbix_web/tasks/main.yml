@@ -7,8 +7,8 @@
 #   4. TLS materijal
 #   5. PHP-FPM pool
 #   6. Vhost konfiguracija
-#   7. Iskljucivanje vendorove konfiguracije
-#   8. Provera konfiguracije
+#   7. Iskljucivanje vendorove i podrazumevane konfiguracije
+#   8. Provera konfiguracije i zauzetosti portova
 #   9. zabbix.conf.php — preskace carobnjak
 #  10. Servisi
 #
@@ -32,6 +32,17 @@
           Rola "zabbix_web" trenutno podrzava iskljucivo Debian/Ubuntu,
           a ovaj host je {{ ansible_os_family | default('nepoznat') }}.
         success_msg: "Distribucija je podrzana."
+
+    # Pogresna vrednost bi tiho pala na MySQL, i u zabbix.conf.php i u
+    # izboru PHP ekstenzije. Bolje prekinuti odmah.
+    - name: "Provera izbora backend-a"
+      ansible.builtin.assert:
+        that:
+          - role_zabbix_web_db_backend in ['mysql', 'pgsql']
+        fail_msg: >-
+          role_zabbix_web_db_backend mora biti "mysql" ili "pgsql",
+          a zadato je "{{ role_zabbix_web_db_backend }}".
+        success_msg: "Backend baze je ispravno zadat."
 
     - name: "Provera da je lozinka baze zadata"
       ansible.builtin.assert:
@@ -167,6 +178,20 @@
     - name: "Otkrivena verzija PHP-a"
       ansible.builtin.debug:
         msg: "PHP-FPM verzija: {{ _zabbix_web_php_version }}"
+
+    # Tek sada, jer se ime paketa izvodi iz otkrivene verzije PHP-a.
+    #
+    # Paket zabbix-frontend-php ima ALTERNATIVNU zavisnost na PHP
+    # ekstenziju za bazu, pa apt bira jednu — u praksi MySQL. Sa
+    # role_zabbix_web_db_backend: pgsql frontend bi ostao bez pgsql
+    # ekstenzije i prijavio gresku koja ne upucuje na uzrok.
+    - name: "PHP ekstenzija za {{ role_zabbix_web_db_backend }}"
+      ansible.builtin.apt:
+        name: "{{ _zabbix_web_db_php_package }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      notify: "Restartuj PHP-FPM"
 
     # Od zvanicnih paketa 7.2 PHP fajlovi frontenda su premesteni iz
     # /usr/share/zabbix u /usr/share/zabbix/ui. Zakovana putanja bi na
@@ -414,14 +439,18 @@
       notify: "Restartuj web server"
 
     # -----------------------------------------------------------------
-    # 7. Iskljucivanje vendorove konfiguracije
+    # 7. Iskljucivanje vendorove i podrazumevane konfiguracije
     # -----------------------------------------------------------------
     # Tek POSLE upisa nasih fajlova, da izmedju dva stanja ne postoji
     # trenutak bez ijedne vazece konfiguracije.
     #
-    # Uklanjaju se ISKLJUCIVO simbolicne veze koje je napravila
-    # postinst skripta. Fajlovi na koje pokazuju — /etc/zabbix/nginx.conf
-    # i /etc/zabbix/php-fpm.conf — ostaju netaknuti.
+    # Uklanjaju se ISKLJUCIVO simbolicne veze koje su napravile postinst
+    # skripte. Fajlovi na koje pokazuju — /etc/zabbix/nginx.conf,
+    # /etc/zabbix/php-fpm.conf i /etc/nginx/sites-available/default —
+    # ostaju netaknuti.
+    #
+    # PAZNJA NA IMENA: Zabbix koristi razlicita imena na dve strane.
+    # Nginx strana je "zabbix.conf", PHP strana "zabbix-php-fpm.conf".
     #
     # Nadogradnja paketa moze ponovo napraviti ove veze. Rola ih pri
     # sledecem pokretanju ponovo uklanja; do tada frontend radi, samo
@@ -439,6 +468,16 @@
         path: "{{ _zabbix_web_vendor_pool_link }}"
         state: absent
       notify: "Restartuj PHP-FPM"
+
+    # Podrazumevani Nginx sajt slusa na "80 default_server". Ako neko
+    # drugi vec drzi port 80, Nginx zbog njega uopste ne startuje —
+    # a poruka o gresci ovaj fajl ne pominje.
+    - name: "Uklanjanje podrazumevanog Nginx sajta"
+      ansible.builtin.file:
+        path: "{{ _zabbix_web_nginx_default_site }}"
+        state: absent
+      when: role_zabbix_web_disable_default_site | bool
+      notify: "Restartuj web server"
 
     # Ranija verzija role je prepisivala /etc/zabbix/nginx.conf. Na
     # hostovima koji su kroz nju prosli taj conffile i dalje nosi njen
@@ -461,10 +500,10 @@
       when: _dpkg_verify.stdout | length > 0
 
     # -----------------------------------------------------------------
-    # 8. Provera konfiguracije
+    # 8. Provera konfiguracije i zauzetosti portova
     # -----------------------------------------------------------------
-    # Obe provere idu pre restarta. Bez njih bi greska u nasem fajlu
-    # oborila servis koji do tada radi.
+    # Obe provere konfiguracije idu pre restarta. Bez njih bi greska u
+    # nasem fajlu oborila servis koji do tada radi.
     #
     # Provera se ne moze uraditi kroz "validate" parametar modula
     # template, jer i Nginx i PHP-FPM proveravaju CELU konfiguraciju —
@@ -480,12 +519,65 @@
         cmd: "{{ _zabbix_web_php_fpm_binary }} -t"
       changed_when: false
 
+    # "nginx -t" proverava SINTAKSU, ne i da li su portovi slobodni.
+    # Bez ove provere rola pada tek na pokretanju servisa, sa porukom
+    # "Address already in use" koja ne kaze ko drzi port.
+    #
+    # Najcesci krivac je Apache: php paketi ga na nekim hostovima
+    # dovuku kao zavisnost, a on onda drzi port 80.
+    #
+    # Racunaju se samo portovi koje ovaj vhost stvarno otvara: HTTPS
+    # port kada je TLS ukljucen, HTTP port kada TLS nije ukljucen ili
+    # kada na njemu stoji preusmeravanje.
+    - name: "Portovi koje ovaj vhost otvara"
+      ansible.builtin.set_fact:
+        _zabbix_web_ports: >-
+          {{ ([role_zabbix_web_https_port | int]
+               if role_zabbix_web_https_enabled | bool else [])
+             + ([role_zabbix_web_listen_port | int]
+                if (not (role_zabbix_web_https_enabled | bool))
+                   or (role_zabbix_web_http_redirect | bool) else []) }}
+
+    - name: "Ko trenutno slusa na hostu"
+      ansible.builtin.command:
+        cmd: ss -lntpH
+      register: _zabbix_web_listeners
+      changed_when: false
+
+    # Iz spiska se izbacuje sam Nginx — kada rola radi drugi put,
+    # portove ocekivano drzi upravo on.
+    - name: "Izdvajanje tudjih slusalaca na ciljnim portovima"
+      ansible.builtin.set_fact:
+        _zabbix_web_port_conflicts: >-
+          {{ _zabbix_web_listeners.stdout_lines
+             | select('search', ':(' ~ (_zabbix_web_ports | join('|')) ~ ') ')
+             | reject('search', '"nginx"')
+             | list }}
+
+    - name: "Provera da ciljne portove ne drzi neki drugi program"
+      ansible.builtin.assert:
+        that:
+          - _zabbix_web_port_conflicts | length == 0
+        fail_msg: >-
+          Port(ove) {{ _zabbix_web_ports | join(', ') }} vec drzi neko
+          drugi, pa Nginx ne bi startovao. Poruka koju bi systemd
+          prijavio ("Address already in use") ne kaze ko je krivac, pa
+          je ovde ceo red iz "ss -lntp":
+          {{ _zabbix_web_port_conflicts | join(' | ') }}.
+          Ugasi taj program, ili promeni
+          role_zabbix_web_listen_port / role_zabbix_web_https_port.
+        success_msg: "Ciljni portovi su slobodni ili ih vec drzi Nginx."
+
     # -----------------------------------------------------------------
     # 9. Konfiguracija frontenda
     # -----------------------------------------------------------------
     # Ovaj fajl NIJE conffile — ne isporucuje ga nijedan paket, nego ga
     # inace pravi carobnjak pri prvom otvaranju frontenda. Time sto ga
     # rola upisuje, carobnjak se preskace.
+    #
+    # Folder /etc/zabbix/web isporucuje paket zabbix-frontend-php, pa
+    # ovaj task obicno samo podesava vlasnistvo i dozvole. Direktorijum
+    # nije conffile, tako da to ne dira nista sto dpkg proverava.
 
     - name: "Folder za konfiguraciju frontenda"
       ansible.builtin.file:
